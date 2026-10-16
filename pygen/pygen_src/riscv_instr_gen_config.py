@@ -142,7 +142,7 @@ class riscv_instr_gen_config:
         # pmp_cfg = riscv_pmp_cfg  # TODO
 
         # Stack section word length
-        self.stack_len = 5000
+        self.stack_len = self.argv.stack_len
 
         # -----------------------------------------------------------------------------
         # User space memory region and stack setting
@@ -619,6 +619,8 @@ class riscv_instr_gen_config:
                            choices = [0, 1], type = int, default = 0)
         parse.add_argument('--bare_program_mode', help = 'bare_program_mode',
                            choices = [0, 1], type = int, default = 0)
+        parse.add_argument('--stack_len', help='Stack size in XLEN-sized words',
+                           type=int, default=5000)
         parse.add_argument('--num_debug_sub_program',
                            help = 'num_debug_sub_program', type = int, default = 0)
         parse.add_argument('--enable_ebreak_in_debug_rom',
@@ -678,6 +680,8 @@ class riscv_instr_gen_config:
         get_invalid_priv_lvl_csr();
         '''
         args = parse.parse_args()
+        if args.stack_len < 1:
+            parse.error('--stack_len must be at least 1 word')
         return args
 
 
