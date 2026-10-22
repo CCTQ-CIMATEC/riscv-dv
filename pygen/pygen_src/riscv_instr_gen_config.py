@@ -319,6 +319,7 @@ class riscv_instr_gen_config:
         self.sub_program_instr_cnt.size == self.num_of_sub_program
         self.debug_sub_program_instr_cnt.size == self.num_debug_sub_program
         self.main_program_instr_cnt in vsc.rangelist(vsc.rng(10, self.instr_cnt))
+        self.main_program_instr_cnt + self.sub_program_instr_cnt.sum == self.instr_cnt
         with vsc.foreach(self.sub_program_instr_cnt, idx=True) as i:
             self.sub_program_instr_cnt[i].inside(vsc.rangelist(vsc.rng(10, self.instr_cnt)))
 

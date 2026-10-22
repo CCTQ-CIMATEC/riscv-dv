@@ -283,9 +283,11 @@ class riscv_instr:
         if len(load_store_instr) == 0:
             load_store_instr = cls.instr_category["LOAD"] + \
                 cls.instr_category["STORE"]
-        cls.idx = random.randrange(0, len(load_store_instr) - 1)
+        cls.idx = random.randrange(0, len(load_store_instr))
         name = load_store_instr[cls.idx]
-        instr_h = copy.copy(cls.instr_template[name])
+        # A deep copy, as in get_rand_instr: a shallow one shares the pyvsc
+        # fields (rs1, rd, ...) of the template among every copy.
+        instr_h = copy.deepcopy(cls.instr_template[name])
         return instr_h
 
     @classmethod
@@ -293,7 +295,7 @@ class riscv_instr:
         if not cls.instr_template.get(name):
             logging.critical("Cannot get instr %s", name)
             sys.exit(1)
-        instr_h = copy.copy(cls.instr_template[name])
+        instr_h = copy.deepcopy(cls.instr_template[name])
         return instr_h
 
     def set_rand_mode(self):
