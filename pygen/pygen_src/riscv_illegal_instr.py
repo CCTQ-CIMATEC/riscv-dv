@@ -13,11 +13,12 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 """
 
 import vsc
+import random
 import logging
 from enum import IntEnum, auto
 from importlib import import_module
 from pygen_src.riscv_instr_gen_config import cfg
-from pygen_src.riscv_instr_pkg import riscv_instr_group_t
+from pygen_src.riscv_instr_pkg import riscv_instr_group_t, privileged_reg_t
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 
 
@@ -26,6 +27,10 @@ rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting
 # The illegal instruction will be generated in binary format and mixed with other valid instr.
 # The mixed instruction stream will be stored in data section and loaded to instruction pages
 # at run time.
+#
+# Port of src/riscv_illegal_instr.sv. pyvsc builds the constraints when the object is created,
+# so every list they use (legal opcodes, CSRs) is complete in __init__, and the constraints use
+# the vsc operators (&, |, ~, implies): Python's and/or/not do not build vsc expressions.
 # ---------------------------------------------------------------------------------------------
 
 
@@ -54,6 +59,12 @@ class reserved_c_instr_e(IntEnum):
     kReservedC2 = auto()
 
 
+def supports_compressed():
+    return any(group in rcs.supported_isa for group in
+               (riscv_instr_group_t.RV32C, riscv_instr_group_t.RV64C,
+                riscv_instr_group_t.RV128C))
+
+
 @vsc.randobj
 class riscv_illegal_instr:
     def __init__(self):
@@ -69,18 +80,29 @@ class riscv_illegal_instr:
         self.has_func7 = vsc.rand_bit_t(1)
         self.c_op = vsc.rand_bit_t(2)
         self.c_msb = vsc.rand_bit_t(3)
-        self.csrs = []
-        # Default legal self.opcode for RV32I instructions
-        self.legal_opcode = vsc.list_t(vsc.bit_t(7))
-        self.legal_opcode = [3, 15, 19, 23, 35, 55, 99, 51, 103, 115, 111]
-        # Default legal self.opcode for RV32C instructions
-        self.legal_c00_opcode = vsc.list_t(vsc.bit_t(3))
-        self.legal_c00_opcode = [0, 2, 6]
-        self.legal_c10_opcode = vsc.list_t(vsc.bit_t(3))
-        self.legal_c10_opcode = [0, 2, 4, 6]
-        self.xlen = vsc.uint8_t(0)
-        self.xlen = rcs.XLEN
-        self.temp_1 = vsc.bit_t(6)
+        # Every CSR the generator knows, implemented or not: an illegal CSR access uses an
+        # address outside this list, so no ISS implements it
+        self.csrs = [csr.value for csr in privileged_reg_t] + list(rcs.custom_csr)
+        # Default legal opcodes for RV32I instructions
+        self.legal_opcode = [0b0000011, 0b0001111, 0b0010011, 0b0010111, 0b0100011,
+                             0b0110111, 0b1100011, 0b0110011, 0b1100111, 0b1110011,
+                             0b1101111]
+        # Default legal opcodes for RV32C instructions
+        self.legal_c00_opcode = [0b000, 0b010, 0b110]
+        self.legal_c10_opcode = [0b000, 0b010, 0b100, 0b110]
+        isa = rcs.supported_isa
+        if riscv_instr_group_t.RV32F in isa or riscv_instr_group_t.RV32D in isa:
+            self.legal_opcode.extend((0b0000111, 0b0100111, 0b1000011, 0b1000111,
+                                      0b1001011, 0b1001111, 0b1010011))
+        if riscv_instr_group_t.RV64I in isa:
+            self.legal_opcode.append(0b0011011)
+        if riscv_instr_group_t.RV32A in isa:
+            self.legal_opcode.append(0b0101111)
+        if riscv_instr_group_t.RV64I in isa or riscv_instr_group_t.RV64M in isa:
+            self.legal_opcode.append(0b0111011)
+        if riscv_instr_group_t.RV64I in isa:
+            self.legal_c00_opcode.extend((0b011, 0b111))
+            self.legal_c10_opcode.extend((0b011, 0b111))
 
     @vsc.constraint
     def exception_dist_c(self):
@@ -93,6 +115,9 @@ class riscv_illegal_instr:
                   vsc.weight(illegal_instr_type_e.kHintInstr, 3),
                   vsc.weight(illegal_instr_type_e.kIllegalSystemInstr, 3)
                   ])
+        if not supports_compressed():
+            self.exception != illegal_instr_type_e.kHintInstr
+            self.compressed == 0
 
     @vsc.constraint
     def instr_bit_assignment_c(self):
@@ -100,7 +125,7 @@ class riscv_illegal_instr:
         vsc.solve_order(self.func3, self.instr_bin)
         vsc.solve_order(self.func7, self.instr_bin)
         vsc.solve_order(self.c_msb, self.instr_bin)
-        # vsc.solve_order(self.c_op, self.instr_bin)
+        vsc.solve_order(self.c_op, self.instr_bin)
         with vsc.if_then(self.compressed == 1):
             self.instr_bin[1:0] == self.c_op
             self.instr_bin[15:13] == self.c_msb
@@ -115,7 +140,7 @@ class riscv_illegal_instr:
     @vsc.constraint
     def system_instr_c(self):
         with vsc.if_then(self.exception == illegal_instr_type_e.kIllegalSystemInstr):
-            self.opcode == 115
+            self.opcode == 0b1110011
             # ECALL/EBREAK/xRET/WFI
             with vsc.if_then(self.func3 == 0):
                 # Constrain RS1 and RD to be non-zero
@@ -123,19 +148,20 @@ class riscv_illegal_instr:
                 self.instr_bin[11:7] != 0
                 # Valid SYSTEM instructions considered by this
                 # Constrain the upper 12 bits to be invalid
-                self.instr_bin[31:20].not_inside(vsc.rangelist(0, 1, 2, 258, 770, 1970, 261))
+                self.instr_bin[31:20].not_inside(
+                    vsc.rangelist(0x0, 0x1, 0x2, 0x102, 0x302, 0x7b2, 0x105))
             with vsc.else_then():
                 # Invalid CSR instructions
                 self.instr_bin[31:20].not_inside(vsc.rangelist(self.csrs))
-                # self.instr_bin[20:31].not_inside(vsc.rangelist(self.custom_csr))
 
     @vsc.constraint
     def legal_rv32_c_slli(self):
-        with vsc.if_then((self.c_msb == 0) and (self.c_op == 2) and (self.xlen == 32)):
-            with vsc.if_then(self.exception == illegal_instr_type_e.kReservedCompressedInstr):
-                self.instr_bin[12] == 1
-            with vsc.else_then():
-                self.instr_bin[12] == 0
+        if rcs.XLEN == 32:
+            with vsc.if_then((self.c_msb == 0b000) & (self.c_op == 0b10)):
+                with vsc.if_then(self.exception == illegal_instr_type_e.kReservedCompressedInstr):
+                    self.instr_bin[12] == 1
+                with vsc.else_then():
+                    self.instr_bin[12] == 0
 
     @vsc.constraint
     def exception_type_c(self):
@@ -155,28 +181,29 @@ class riscv_illegal_instr:
 
     @vsc.constraint
     def compressed_instr_op_c(self):
-        self.c_op != 3
+        self.c_op != 0b11
 
-    # Avoid generating illegal func3/func7 errors for self.opcode used by B-extension for now
+    # Avoid generating illegal func3/func7 errors for opcodes used by B-extension for now
     # TODO: add support for generating illegal B-extension instructions
     @vsc.constraint
     def b_extension_c(self):
         if riscv_instr_group_t.RV32B in rcs.supported_isa:
-            with vsc.if_then(self.exception.inside(vsc.rangelist(illegal_instr_type_e.kIllegalFunc3,
-                                                illegal_instr_type_e.kIllegalFunc7))):
-                self.opcode.inside(vsc.rangelist([51, 19, 59]))
+            with vsc.if_then(self.exception.inside(
+                    vsc.rangelist(illegal_instr_type_e.kIllegalFunc3,
+                                  illegal_instr_type_e.kIllegalFunc7))):
+                self.opcode.not_inside(vsc.rangelist(0b0110011, 0b0010011, 0b0111011))
 
     @vsc.constraint
     def illegal_compressed_op_c(self):
         with vsc.if_then(self.exception == illegal_instr_type_e.kIllegalCompressedOpcode):
-            self.c_op != 1
-            with vsc.if_then(self.legal_c00_opcode.size == 8):
-                self.c_op != 0
-            with vsc.else_then():
+            self.c_op != 0b01
+            if len(self.legal_c00_opcode) == 8:
+                self.c_op != 0b00
+            else:
                 self.c_msb.not_inside(vsc.rangelist(self.legal_c00_opcode))
-            with vsc.if_then(self.legal_c10_opcode.size == 8):
-                self.c_op != 2
-            with vsc.else_then():
+            if len(self.legal_c10_opcode) == 8:
+                self.c_op != 0b10
+            else:
                 self.c_msb.not_inside(vsc.rangelist(self.legal_c10_opcode))
 
     @vsc.constraint
@@ -186,67 +213,63 @@ class riscv_illegal_instr:
         vsc.solve_order(self.reserved_c, self.instr_bin)
         vsc.solve_order(self.reserved_c, self.c_msb)
         vsc.solve_order(self.reserved_c, self.c_op)
-        with vsc.if_then(self.xlen == 32):
+        if rcs.XLEN == 32:
             # c.addiw is RV64/RV128 only instruction, the encoding is used for C.JAL for RV32C
             self.reserved_c != reserved_c_instr_e.kReservedAddiw
         with vsc.if_then(self.exception == illegal_instr_type_e.kReservedCompressedInstr):
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kIllegalCompressed):
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kIllegalCompressed):
                 self.instr_bin[15:0] == 0
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedAddispn):
-                ((self.instr_bin[15:0] == 0) and (self.c_op == 0))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedAddiw):
-                ((self.c_msb == 1) and (self.c_op == 1) and
-                 (self.instr_bin[11:7] == 0))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedC0):
-                ((self.instr_bin[15:10] == 39) and
-                 (self.instr_bin[6:5] == 2) and (self.c_op == 1))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedC1):
-                ((self.instr_bin[15:10] == 39) and
-                 (self.instr_bin[6:5] == 3) and (self.c_op == 1))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedC2):
-                ((self.c_msb == 4) and (self.c_op == 0))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedAddi16sp):
-                ((self.c_msb == 3) and (self.c_op == 1) and
-                 (self.instr_bin[11:7] == 2) and
-                 (not self.instr_bin[12]) and (self.instr_bin[6:2] == 0))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedLui):
-                ((self.c_msb == 3) and (self.c_op == 1) and
-                 (not self.instr_bin[12]) and (self.instr_bin[6:2] == 0))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedJr):
-                self.instr_bin == 32770
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedLqsp):
-                ((self.c_msb == 1) and (self.c_op == 2) and
-                 (self.instr_bin[11:7] == 0))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedLwsp):
-                ((self.c_msb == 2) and (self.c_op == 2) and
-                 (self.instr_bin[11:7] == 0))
-            with vsc.if_then(self.reserved_c == reserved_c_instr_e.kReservedLdsp):
-                ((self.c_msb == 3) and (self.c_op == 2) and (self.instr_bin[11:7] == 0))
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedAddispn):
+                (self.instr_bin[15:5] == 0) & (self.c_op == 0b00)
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedAddiw):
+                (self.c_msb == 0b001) & (self.c_op == 0b01) & (self.instr_bin[11:7] == 0)
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedC0):
+                ((self.instr_bin[15:10] == 0b100111) & (self.instr_bin[6:5] == 0b10) &
+                 (self.c_op == 0b01))
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedC1):
+                ((self.instr_bin[15:10] == 0b100111) & (self.instr_bin[6:5] == 0b11) &
+                 (self.c_op == 0b01))
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedC2):
+                (self.c_msb == 0b100) & (self.c_op == 0b00)
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedAddi16sp):
+                ((self.c_msb == 0b011) & (self.c_op == 0b01) & (self.instr_bin[11:7] == 2) &
+                 (self.instr_bin[12] == 0) & (self.instr_bin[6:2] == 0))
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedLui):
+                ((self.c_msb == 0b011) & (self.c_op == 0b01) & (self.instr_bin[12] == 0) &
+                 (self.instr_bin[6:2] == 0))
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedJr):
+                self.instr_bin[15:0] == 0b1000_0000_0000_0010
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedLqsp):
+                (self.c_msb == 0b001) & (self.c_op == 0b10) & (self.instr_bin[11:7] == 0)
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedLwsp):
+                (self.c_msb == 0b010) & (self.c_op == 0b10) & (self.instr_bin[11:7] == 0)
+            with vsc.implies(self.reserved_c == reserved_c_instr_e.kReservedLdsp):
+                (self.c_msb == 0b011) & (self.c_op == 0b10) & (self.instr_bin[11:7] == 0)
 
     @vsc.constraint
     def hint_instr_c(self):
         with vsc.if_then(self.exception == illegal_instr_type_e.kHintInstr):
-            ((self.c_msb == 0) and (self.c_op == 1) and (self.instr_bin[12] +
-                                                         self.instr_bin[6:2] == 0)) or \
-                ((self.c_msb == 2) and (self.c_op == 1) and (self.instr_bin[11:7] == 0)) or \
-                ((self.c_msb == 4) and (self.c_op == 1) and (self.instr_bin[12:11] == 0) and
-                 (self.instr_bin[6:2] == 0)) or \
-                ((self.c_msb == 4) and (self.c_op == 2) and (self.instr_bin[11:7] == 0) and
-                 (self.instr_bin[6:2] != 0)) or \
-                ((self.c_msb == 3) and (self.c_op == 1) and (self.instr_bin[11:7] == 0) and
-                 (self.instr_bin[12] + self.instr_bin[6:2]) != 0) or \
-                ((self.c_msb == 0) and (self.c_op == 2) and (self.instr_bin[11:7] == 0)) or \
-                ((self.c_msb == 0) and (self.c_op == 2) and (self.instr_bin[11:7] != 0) and
-                 not(self.instr_bin[12]) and (self.instr_bin[6:2] == 0)) or \
-                ((self.c_msb == 4) and (self.c_op == 2) and (self.instr_bin[11:7] == 0) and
-                 self.instr_bin[12] and (self.instr_bin[6:2] != 0))
+            (((self.c_msb == 0b000) & (self.c_op == 0b01) & (self.instr_bin[12] == 0) &
+              (self.instr_bin[6:2] == 0)) |
+             ((self.c_msb == 0b010) & (self.c_op == 0b01) & (self.instr_bin[11:7] == 0)) |
+             ((self.c_msb == 0b100) & (self.c_op == 0b01) & (self.instr_bin[12:11] == 0) &
+              (self.instr_bin[6:2] == 0)) |
+             ((self.c_msb == 0b100) & (self.c_op == 0b10) & (self.instr_bin[11:7] == 0) &
+              (self.instr_bin[6:2] != 0)) |
+             ((self.c_msb == 0b011) & (self.c_op == 0b01) & (self.instr_bin[11:7] == 0) &
+              ((self.instr_bin[12] != 0) | (self.instr_bin[6:2] != 0))) |
+             ((self.c_msb == 0b000) & (self.c_op == 0b10) & (self.instr_bin[11:7] == 0)) |
+             ((self.c_msb == 0b000) & (self.c_op == 0b10) & (self.instr_bin[11:7] != 0) &
+              (self.instr_bin[12] == 0) & (self.instr_bin[6:2] == 0)) |
+             ((self.c_msb == 0b100) & (self.c_op == 0b10) & (self.instr_bin[11:7] == 0) &
+              (self.instr_bin[12] == 1) & (self.instr_bin[6:2] != 0)))
 
     @vsc.constraint
     def illegal_opcode_c(self):
         vsc.solve_order(self.opcode, self.instr_bin)
         with vsc.if_then(self.exception == illegal_instr_type_e.kIllegalOpcode):
             self.opcode.not_inside(vsc.rangelist(self.legal_opcode))
-            self.opcode[1:0] == 3
+            self.opcode[1:0] == 0b11
         with vsc.else_then():
             self.opcode.inside(vsc.rangelist(self.legal_opcode))
 
@@ -254,65 +277,67 @@ class riscv_illegal_instr:
     @vsc.constraint
     def no_atomic_c(self):
         with vsc.if_then(self.exception != illegal_instr_type_e.kIllegalOpcode):
-            self.opcode != 47
+            self.opcode != 0b0101111
 
     @vsc.constraint
     def illegal_func3_c(self):
         vsc.solve_order(self.opcode, self.func3)
         with vsc.if_then(self.compressed == 0):
             with vsc.if_then(self.exception == illegal_instr_type_e.kIllegalFunc3):
-                with vsc.if_then(self.opcode == 103):
-                    self.func3 != 0
-                with vsc.if_then(self.opcode == 99):
-                    self.func3.inside(vsc.rangelist(2, 3))
-                with vsc.if_then(self.xlen == 32):
-                    with vsc.if_then(self.opcode == 35):
-                        self.func3 >= 3
-                    with vsc.if_then(self.opcode == 3):
-                        self.func3.inside(vsc.rangelist(3, 7))
-                with vsc.else_then():
-                    with vsc.if_then(self.opcode == 35):
-                        self.func3 > 3
-                    with vsc.if_then(self.opcode == 3):
-                        self.func3 == 7
-                with vsc.if_then(self.opcode == 15):
-                    self.func3.not_inside(vsc.rangelist(0, 1))
-                with vsc.if_then(self.opcode == 115):
-                    self.func3 == 4
-                with vsc.if_then(self.opcode == 27):
-                    self.func3.not_inside(vsc.rangelist(0, 1, 5))
-                with vsc.if_then(self.opcode == 59):
-                    self.func3.inside(vsc.rangelist(2, 3))
-                self.opcode.inside(vsc.rangelist(103, 99, 3, 35, 15, 115, 27, 59))
+                with vsc.implies(self.opcode == 0b1100111):
+                    self.func3 != 0b000
+                with vsc.implies(self.opcode == 0b1100011):
+                    self.func3.inside(vsc.rangelist(0b010, 0b011))
+                if rcs.XLEN == 32:
+                    with vsc.implies(self.opcode == 0b0100011):
+                        self.func3 >= 0b011
+                    with vsc.implies(self.opcode == 0b0000011):
+                        self.func3.inside(vsc.rangelist(0b011, 0b111))
+                else:
+                    with vsc.implies(self.opcode == 0b0100011):
+                        self.func3 > 0b011
+                    with vsc.implies(self.opcode == 0b0000011):
+                        self.func3 == 0b111
+                with vsc.implies(self.opcode == 0b0001111):
+                    self.func3.not_inside(vsc.rangelist(0b000, 0b001))
+                with vsc.implies(self.opcode == 0b1110011):
+                    self.func3 == 0b100
+                with vsc.implies(self.opcode == 0b0011011):
+                    self.func3.not_inside(vsc.rangelist(0b000, 0b001, 0b101))
+                with vsc.implies(self.opcode == 0b0111011):
+                    self.func3.inside(vsc.rangelist(0b010, 0b011))
+                self.opcode.inside(vsc.rangelist(0b1100111, 0b1100011, 0b0000011, 0b0100011,
+                                                 0b0001111, 0b1110011, 0b0011011, 0b0111011))
             with vsc.else_then():
-                with vsc.if_then(self.opcode == 103):
-                    self.func3 == 0
-                with vsc.if_then(self.opcode == 99):
-                    self.func3.inside(vsc.rangelist(2, 3))
-                with vsc.if_then(self.xlen == 32):
-                    with vsc.if_then(self.opcode == 35):
-                        self.func3 < 3
-                    with vsc.if_then(self.opcode == 3):
-                        self.func3.inside(vsc.rangelist(3, 7))
-                with vsc.else_then():
-                    with vsc.if_then(self.opcode == 35):
-                        self.func3 <= 3
-                    with vsc.if_then(self.opcode == 3):
-                        self.func3 != 7
-                with vsc.if_then(self.opcode == 15):
-                    self.func3.inside(vsc.rangelist(0, 1))
-                with vsc.if_then(self.opcode == 115):
-                    self.func3 != 4
-                with vsc.if_then(self.opcode == 27):
-                    self.func3.inside(vsc.rangelist(0, 1, 5))
-                with vsc.if_then(self.opcode == 59):
-                    self.func3.not_inside(vsc.rangelist(2, 3))
+                with vsc.implies(self.opcode == 0b1100111):
+                    self.func3 == 0b000
+                with vsc.implies(self.opcode == 0b1100011):
+                    self.func3.not_inside(vsc.rangelist(0b010, 0b011))
+                if rcs.XLEN == 32:
+                    with vsc.implies(self.opcode == 0b0100011):
+                        self.func3 < 0b011
+                    with vsc.implies(self.opcode == 0b0000011):
+                        self.func3.not_inside(vsc.rangelist(0b011, 0b111))
+                else:
+                    with vsc.implies(self.opcode == 0b0100011):
+                        self.func3 <= 0b011
+                    with vsc.implies(self.opcode == 0b0000011):
+                        self.func3 != 0b111
+                with vsc.implies(self.opcode == 0b0001111):
+                    self.func3.inside(vsc.rangelist(0b000, 0b001))
+                with vsc.implies(self.opcode == 0b1110011):
+                    self.func3 != 0b100
+                with vsc.implies(self.opcode == 0b0011011):
+                    self.func3.inside(vsc.rangelist(0b000, 0b001, 0b101))
+                with vsc.implies(self.opcode == 0b0111011):
+                    self.func3.not_inside(vsc.rangelist(0b010, 0b011))
 
     @vsc.constraint
     def has_func7_c(self):
         vsc.solve_order(self.opcode, self.func7)
-        with vsc.if_then((self.opcode == 19) and (self.func3 == 1 or self.func3 == 5) or
-                         (self.opcode == 51 or self.opcode == 59)):
+        with vsc.if_then(((self.opcode == 0b0010011) &
+                          ((self.func3 == 0b001) | (self.func3 == 0b101))) |
+                         (self.opcode == 0b0110011) | (self.opcode == 0b0111011)):
             self.has_func7 == 1
         with vsc.else_then():
             self.has_func7 == 0
@@ -320,7 +345,7 @@ class riscv_illegal_instr:
     @vsc.constraint
     def has_func3_c(self):
         vsc.solve_order(self.opcode, self.func7)
-        with vsc.if_then(self.opcode == 55 or self.opcode == 111 or self.opcode == 23):
+        with vsc.if_then(self.opcode.inside(vsc.rangelist(0b0110111, 0b1101111, 0b0010111))):
             self.has_func3 == 0
         with vsc.else_then():
             self.has_func3 == 1
@@ -329,40 +354,41 @@ class riscv_illegal_instr:
     def illegal_func7_c(self):
         with vsc.if_then(self.compressed == 0):
             with vsc.if_then(self.exception == illegal_instr_type_e.kIllegalFunc7):
-                self.func7.not_inside(vsc.rangelist(0, 32, 1))
-                with vsc.if_then(self.opcode == 9):  # SLLI, SRLI, SRAI
-                    self.func7[6:1].not_inside(vsc.rangelist(0, 16))
+                self.func7.not_inside(vsc.rangelist(0b0000000, 0b0100000, 0b0000001))
+                # SLLI, SRLI, SRAI (the SV source compares with 7'b0001001, a typo)
+                with vsc.if_then(self.opcode == 0b0010011):
+                    self.func7[6:1].not_inside(vsc.rangelist(0b000000, 0b010000))
             with vsc.else_then():
-                self.func7.inside(vsc.rangelist(0, 32, 1))
+                self.func7.inside(vsc.rangelist(0b0000000, 0b0100000, 0b0000001))
 
+    # Draws a non-HINT type with the weights of exception_dist_c, leaving out the compressed
+    # types when the target has no C extension
+    def pick_exception(self):
+        weights = {illegal_instr_type_e.kIllegalOpcode: 3,
+                   illegal_instr_type_e.kIllegalFunc3: 1,
+                   illegal_instr_type_e.kIllegalFunc7: 1,
+                   illegal_instr_type_e.kIllegalSystemInstr: 3}
+        if supports_compressed():
+            weights[illegal_instr_type_e.kIllegalCompressedOpcode] = 1
+            weights[illegal_instr_type_e.kReservedCompressedInstr] = 1
+        return random.choices(list(weights), weights=list(weights.values()))[0]
+
+    # The lists are built in __init__; kept for the callers of the SV init()
     def initialize(self):
-        if (riscv_instr_group_t.RV32F in rcs.supported_isa) or \
-                (riscv_instr_group_t.RV32D in rcs.supported_isa):
-            self.legal_opcode.extend((7, 39, 67, 71, 75, 79, 83))
-        if riscv_instr_group_t.RV64I in rcs.supported_isa:
-            self.legal_opcode.append(27)
-        if riscv_instr_group_t.RV32A in rcs.supported_isa:
-            self.legal_opcode.append(47)
-        if (riscv_instr_group_t.RV64I in rcs.supported_isa) or \
-                (riscv_instr_group_t.RV64M in rcs.supported_isa):
-            self.legal_opcode.append(59)
-        if riscv_instr_group_t.RV64I in rcs.supported_isa:
-            self.legal_c00_opcode.extend((3, 7))
-            self.legal_c10_opcode.extend((3, 7))
-        # TODO csr
+        pass
 
     def get_bin_str(self):
         if self.compressed == 1:
-            local_instr_bin = self.instr_bin & 0xffff
+            bin_str = "0x{:04x}".format(self.instr_bin & 0xffff)
         else:
-            local_instr_bin = hex(self.instr_bin)
+            bin_str = "0x{:08x}".format(self.instr_bin)
         logging.info("Illegal instruction type: {}, illegal instruction: {}".format(
-            self.exception.name, local_instr_bin))
-        return ("{}".format(local_instr_bin))
+            self.exception.name, bin_str))
+        return bin_str
 
     def post_randomize(self):
         self.comment = self.exception.name
         if self.exception == illegal_instr_type_e.kReservedCompressedInstr:
             self.comment += " {}".format(self.reserved_c.name)
         elif self.exception == illegal_instr_type_e.kIllegalOpcode:
-            self.comment += " {}".format(self.opcode)
+            self.comment += " {:07b}".format(self.opcode)

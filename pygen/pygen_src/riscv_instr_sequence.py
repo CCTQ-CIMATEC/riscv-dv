@@ -18,7 +18,8 @@ from importlib import import_module
 from collections import defaultdict
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.riscv_instr_stream import riscv_rand_instr_stream
-from pygen_src.riscv_illegal_instr import riscv_illegal_instr, illegal_instr_type_e
+from pygen_src.riscv_illegal_instr import (riscv_illegal_instr, illegal_instr_type_e,
+                                           supports_compressed)
 from pygen_src.riscv_directed_instr_lib import riscv_pop_stack_instr, riscv_push_stack_instr
 from pygen_src.riscv_instr_pkg import (pkg_ins, riscv_instr_name_t, riscv_reg_t,
                                        riscv_instr_category_t)
@@ -291,14 +292,22 @@ class riscv_instr_sequence:
             logging.info("Injecting {} illegal instructions, ratio {}/100".
                          format(bin_instr_cnt, cfg.illegal_instr_ratio))
             for _ in range(bin_instr_cnt):
+                # The type is drawn here: pyvsc does not honor exception_dist_c next to the
+                # other constraints (kIllegalSystemInstr came out 5% of the time, not 3/8)
+                exception = self.illegal_instr.pick_exception()
                 with vsc.randomize_with(self.illegal_instr):
-                    self.illegal_instr.exception != illegal_instr_type_e.kHintInstr
+                    self.illegal_instr.exception == exception
                 insert_str = "{}.4byte {} # {}".format(pkg_ins.indent,
                                                        self.illegal_instr.get_bin_str(),
                                                        self.illegal_instr.comment)
                 idx = random.randrange(0, len(self.instr_string_list))
                 self.instr_string_list.insert(idx, insert_str)
         bin_instr_cnt = int(self.instr_cnt * cfg.hint_instr_ratio / 1000)
+        # The generator only knows compressed HINTs (riscv_illegal_instr.sv does the same)
+        if bin_instr_cnt > 0 and not supports_compressed():
+            logging.warning("hint_instr_ratio ignored: HINTs are generated as compressed "
+                            "instructions and the target has no C extension")
+            bin_instr_cnt = 0
         if bin_instr_cnt >= 0:
             logging.info("Injecting {} HINT instructions, ratio {}/100".format(
                 bin_instr_cnt, cfg.hint_instr_ratio))

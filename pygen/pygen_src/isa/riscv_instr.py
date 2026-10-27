@@ -21,7 +21,7 @@ from bitstring import BitArray
 from importlib import import_module
 from pygen_src.riscv_instr_pkg import (pkg_ins, riscv_instr_category_t, riscv_reg_t,
                                        riscv_instr_name_t, riscv_instr_format_t,
-                                       riscv_instr_group_t, imm_t)
+                                       riscv_instr_group_t, imm_t, privileged_mode_t)
 from pygen_src.riscv_instr_gen_config import cfg
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 reload(logging)
@@ -188,21 +188,21 @@ class riscv_instr:
     def build_basic_instruction_list(cls, cfg):
         cls.basic_instr = (cls.instr_category["SHIFT"] + cls.instr_category["ARITHMETIC"] +
                            cls.instr_category["LOGICAL"] + cls.instr_category["COMPARE"])
+        # The names are riscv_instr_name_t members, the keys of instr_template
         if cfg.no_ebreak == 0:
-            cls.basic_instr.append("EBREAK")
-            for _ in rcs.supported_isa:
-                if(riscv_instr_group_t.RV32C in rcs.supported_isa and
-                   not(cfg.disable_compressed_instr)):
-                    cls.basic_instr.append("C_EBREAK")
-                    break
+            cls.basic_instr.append(riscv_instr_name_t.EBREAK)
+            if(riscv_instr_group_t.RV32C in rcs.supported_isa and
+               not(cfg.disable_compressed_instr)):
+                cls.basic_instr.append(riscv_instr_name_t.C_EBREAK)
         if cfg.no_dret == 0:
-            cls.basic_instr.append("DRET")
+            cls.basic_instr.append(riscv_instr_name_t.DRET)
         if cfg.no_fence == 0:
-            cls.basic_instr.append(cls.instr_category["SYNCH"])
-        if(cfg.no_csr_instr == 0 and cfg.init_privileged_mode == "MACHINE_MODE"):
-            cls.basic_instr.append(cls.instr_category["CSR"])
+            cls.basic_instr.extend(cls.instr_category["SYNCH"])
+        if(cfg.no_csr_instr == 0 and
+           cfg.init_privileged_mode == privileged_mode_t.MACHINE_MODE):
+            cls.basic_instr.extend(cls.instr_category["CSR"])
         if cfg.no_wfi == 0:
-            cls.basic_instr.append("WFI")
+            cls.basic_instr.append(riscv_instr_name_t.WFI)
 
     @classmethod
     def create_csr_filter(cls, cfg):
@@ -225,8 +225,6 @@ class riscv_instr:
     def get_rand_instr(cls, include_instr=[], exclude_instr=[],
                        include_category=[], exclude_category=[],
                        include_group=[], exclude_group=[]):
-        idx = BitArray(uint = 0, length = 32)
-        name = ""
         allowed_instr = []
         disallowed_instr = []
         # allowed_categories = []
@@ -243,34 +241,24 @@ class riscv_instr:
 
         disallowed_instr.extend(exclude_instr)
 
-        # TODO Randomization logic needs to be frame with PyVSC library
-        if len(disallowed_instr) == 0:
-            try:
-                if len(include_instr) > 0:
-                    if len(include_instr) == 1:
-                        idx = 0
-                    else:
-                        idx = random.randrange(0, len(include_instr) - 1)
-                    name = include_instr[idx]
-                elif len(allowed_instr) > 0:
-                    idx = random.randrange(0, len(allowed_instr) - 1)
-                    name = allowed_instr[idx]
-                else:
-                    idx = random.randrange(0, len(cls.instr_names) - 1)
-                    name = cls.instr_names[idx]
-            except Exception:
-                logging.critical("[%s] Cannot generate random instruction", riscv_instr.__name__)
-                sys.exit(1)
+        # As in the SV: a name in include_instr (and in allowed_instr when both are given),
+        # else in allowed_instr, else any; never a disallowed one. randrange(0, len - 1)
+        # used here before never drew the last name (EBREAK/WFI, the last COMPARE).
+        # Callers pass exclusions both as members and as their names.
+        if len(include_instr) > 0:
+            candidates = include_instr
+            if len(allowed_instr) > 0:
+                candidates = [n for n in include_instr if n in allowed_instr]
+        elif len(allowed_instr) > 0:
+            candidates = allowed_instr
         else:
-            try:
-                name = random.choice(cls.instr_names)
-                if len(include_instr) > 0:
-                    name = random.choice(include_instr)
-                if len(allowed_instr) > 0:
-                    name = random.choice(allowed_instr)
-            except Exception:
-                logging.critical("[%s] Cannot generate random instruction", riscv_instr.__name__)
-                sys.exit(1)
+            candidates = cls.instr_names
+        disallowed = {getattr(n, "name", n) for n in disallowed_instr}
+        candidates = [n for n in candidates if getattr(n, "name", n) not in disallowed]
+        if len(candidates) == 0:
+            logging.critical("[%s] Cannot generate random instruction", riscv_instr.__name__)
+            sys.exit(1)
+        name = random.choice(candidates)
         # rs1 rs2 values are overwriting and the last generated values are
         # getting assigned for a particular instruction hence creating different
         # object address and id to ratain the randomly generated values.
