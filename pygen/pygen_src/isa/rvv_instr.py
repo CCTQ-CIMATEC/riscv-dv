@@ -247,6 +247,56 @@ DEFINE_VA_INSTR(riscv_instr_name_t.VNCLIP, riscv_instr_format_t.VA_FORMAT,
 # RVV 1.0 section 14.1: vector single-width integer reduction instructions
 DEFINE_VA_INSTR(riscv_instr_name_t.VREDSUM_VS, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VREDMAXU_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VREDMAX_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VREDMINU_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VREDMIN_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VREDAND_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VREDOR_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VREDXOR_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+
+# RVV 1.0 section 14.2: vector widening integer reduction instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VWREDSUMU_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWREDSUM_VS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+
+# RVV 1.0 section 15.1: vector mask-register logical instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VMAND_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMNAND_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMANDN_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMXOR_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMOR_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMNOR_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMORN_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMXNOR_MM, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV, g=globals())
+
+# RVV 1.0 sections 15.2 and 15.3: vector count population and find-first-set mask bit
+DEFINE_VA_INSTR(riscv_instr_name_t.VCPOP_M, riscv_instr_format_t.VS2_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VFIRST_M, riscv_instr_format_t.VS2_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+
+# RVV 1.0 section 16.1: integer scalar move instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VMV_X_S, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMV_S_X, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
 
 # RVV 1.0 section 7.4: vector unit-stride loads and stores
 DEFINE_VA_INSTR(riscv_instr_name_t.VLE_V, riscv_instr_format_t.VL_FORMAT,

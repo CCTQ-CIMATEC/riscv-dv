@@ -69,6 +69,10 @@ class riscv_vector_instr(riscv_instr):
         self.ext_factor = 1
         # Multiply-add operand order: vd, vs1/rs1, vs2
         self.is_multiply_add_instr = 0
+        # The result goes to the x register rd: vcpop.m, vfirst.m and vmv.x.s
+        self.has_scalar_rd = 0
+        # Mask register logical instructions, vm*.mm
+        self.is_mask_logical_instr = 0
 
     # RVV 1.0 section 3.4.2: a register group starts at a register aligned to its size
     @vsc.constraint
@@ -139,9 +143,17 @@ class riscv_vector_instr(riscv_instr):
         if name in ["VMACC", "VNMSAC", "VMADD", "VNMSUB",
                     "VWMACCU", "VWMACC", "VWMACCSU", "VWMACCUS"]:
             self.is_multiply_add_instr = 1
+        if name.endswith("_MM"):
+            self.is_mask_logical_instr = 1
+            self.mask_enable = 0
+        if name in ["VCPOP_M", "VFIRST_M", "VMV_X_S"]:
+            self.has_scalar_rd = 1
+            self.has_rd = 1
+        if name in ["VMV_X_S", "VMV_S_X"]:
+            self.mask_enable = 0
         if len(self.va_variants) > 0:
             self.has_va_variant = 1
-        if self.format == riscv_instr_format_t.VA_FORMAT:
+        if self.format == riscv_instr_format_t.VA_FORMAT and not self.has_scalar_rd:
             # Superset of all variants: rs1 for .vx and imm for .vi
             self.has_rs1 = 1
             self.has_imm = int(any(v in self.va_variants for v in
@@ -174,6 +186,10 @@ class riscv_vector_instr(riscv_instr):
         # RVV 1.0 section 11.3: the source EEW SEW/vf2 or SEW/vf4 is at least 8
         if vector_cfg.vsew // self.ext_factor < 8:
             return 0
+        # RVV 1.0 section 14.2: vwredsum(u) accumulates 2*SEW elements in vd and vs1
+        if (self.is_reduction_instr and self.instr_name.name.startswith("VW") and
+                2 * vector_cfg.vsew > vector_cfg.ELEN):
+            return 0
         return 1
 
     # Register group sizes from the vtype of the test, the drawn variant and, for loads and
@@ -202,6 +218,13 @@ class riscv_vector_instr(riscv_instr):
         if self.category == riscv_instr_category_t.COMPARE:
             # One mask register holds the result of a whole group
             vd_grp = 1
+        if self.is_mask_logical_instr or self.instr_name in [riscv_instr_name_t.VCPOP_M,
+                                                             riscv_instr_name_t.VFIRST_M]:
+            # Masks take one register whatever LMUL is
+            vd_grp = vs1_grp = vs2_grp = 1
+        if self.instr_name in [riscv_instr_name_t.VMV_X_S, riscv_instr_name_t.VMV_S_X]:
+            # RVV 1.0 section 16.1: element 0 of a single register, LMUL is ignored
+            vd_grp = vs2_grp = 1
         if self.category in [riscv_instr_category_t.LOAD, riscv_instr_category_t.STORE]:
             # RVV 1.0 section 7.3: EMUL = (EEW / SEW) * LMUL, a fractional EMUL takes one
             # register
@@ -241,7 +264,13 @@ class riscv_vector_instr(riscv_instr):
         vs1 = "v{}".format(self.vs1)
         vs2 = "v{}".format(self.vs2)
         vs3 = "v{}".format(self.vs3)
-        if self.format == riscv_instr_format_t.VA_FORMAT:
+        if self.instr_name == riscv_instr_name_t.VMV_X_S:
+            asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
+            operands = [self.rd.name, vs2]
+        elif self.instr_name == riscv_instr_name_t.VMV_S_X:
+            asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
+            operands = [vd, self.rs1.name]
+        elif self.format == riscv_instr_format_t.VA_FORMAT:
             if self.has_va_variant:
                 # Last source operand: a vector register, x register or immediate
                 if self.va_variant in [va_variant_t.VV, va_variant_t.VVM, va_variant_t.WV]:
@@ -271,7 +300,7 @@ class riscv_vector_instr(riscv_instr):
                 operands = [vd, vs2, vs1]
         elif self.format == riscv_instr_format_t.VS2_FORMAT:
             asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
-            operands = [vd, vs2]
+            operands = [self.rd.name if self.has_scalar_rd else vd, vs2]
         elif self.format == riscv_instr_format_t.VL_FORMAT:
             asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
             operands = [vd, "({})".format(self.rs1.name)]
