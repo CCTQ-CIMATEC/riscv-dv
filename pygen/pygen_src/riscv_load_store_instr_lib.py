@@ -21,7 +21,8 @@ from importlib import import_module
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.isa.riscv_instr import riscv_instr
 from pygen_src.riscv_directed_instr_lib import riscv_mem_access_stream
-from pygen_src.riscv_instr_pkg import riscv_reg_t, riscv_instr_name_t, riscv_instr_group_t
+from pygen_src.riscv_instr_pkg import (riscv_reg_t, riscv_instr_name_t, riscv_instr_group_t,
+                                       riscv_instr_category_t)
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 
 
@@ -289,3 +290,47 @@ class riscv_load_store_hazard_instr_stream(riscv_load_store_base_instr_stream):
                 self.addr[i] = self.addr[i - 1]
             else:
                 self.offset[i], self.addr[i] = self.rand_offset_addr()
+
+
+# Vector loads and stores from one data page, port of the SV riscv_vector_load_store_instr_stream
+# for unit-stride accesses
+# The base address is a multiple of cfg.vector_cfg.load_store_alignment and the accessed
+# bytes, vl * EEW / 8, stay inside the page
+@vsc.randobj
+class riscv_vector_load_store_instr_stream(riscv_mem_access_stream):
+    def __init__(self):
+        super().__init__()
+        self.rs1_reg = riscv_reg_t.ZERO
+        self.load_store_instr = None
+
+    def post_randomize(self):
+        vector_cfg = cfg.vector_cfg
+        allowed_instr = [name for name, instr in riscv_instr.instr_template.items()
+                         if instr.group == riscv_instr_group_t.RVV and
+                         instr.category in [riscv_instr_category_t.LOAD,
+                                            riscv_instr_category_t.STORE]]
+        if not allowed_instr:
+            logging.critical("No vector load/store instruction for %0s", self.name)
+            sys.exit(1)
+        self.load_store_instr = riscv_instr.get_instr(random.choice(allowed_instr))
+        eew = random.choice(vector_cfg.legal_eew)
+        self.load_store_instr.set_eew(eew)
+        data_page_id = random.randrange(0, self.max_data_page_id)
+        page_size = self.data_page[data_page_id].size_in_bytes
+        num_bytes = vector_cfg.vl * eew // 8
+        align = vector_cfg.load_store_alignment
+        if num_bytes > page_size:
+            logging.critical("Vector access of %0d bytes does not fit data page %0d",
+                             num_bytes, data_page_id)
+            sys.exit(1)
+        base = random.randrange(0, (page_size - num_bytes) // align + 1) * align
+        excluded = [riscv_reg_t.ZERO, *cfg.reserved_regs, *self.reserved_rd]
+        self.rs1_reg = random.choice([reg for reg in riscv_reg_t if reg not in excluded])
+        # Mixed instructions must keep the base register
+        self.reserved_rd.append(self.rs1_reg)
+        with self.load_store_instr.randomize_with() as it:
+            it.rs1 == self.rs1_reg
+        self.instr_list.append(self.load_store_instr)
+        self.add_mixed_instr(random.randrange(0, 11))
+        self.add_rs1_init_la_instr(self.rs1_reg, data_page_id, base)
+        super().post_randomize()
