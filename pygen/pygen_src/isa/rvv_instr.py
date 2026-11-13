@@ -28,6 +28,30 @@ DEFINE_VA_INSTR(riscv_instr_name_t.VRSUB, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
                 [va_variant_t.VX, va_variant_t.VI], g=globals())
 
+# RVV 1.0 section 11.2: vector widening integer add and subtract
+DEFINE_VA_INSTR(riscv_instr_name_t.VWADDU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.WV, va_variant_t.WX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWSUBU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.WV, va_variant_t.WX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWADD, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.WV, va_variant_t.WX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWSUB, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.WV, va_variant_t.WX], g=globals())
+
+# RVV 1.0 section 11.3: vector integer extension
+DEFINE_VA_INSTR(riscv_instr_name_t.VZEXT_VF2, riscv_instr_format_t.VS2_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VZEXT_VF4, riscv_instr_format_t.VS2_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSEXT_VF2, riscv_instr_format_t.VS2_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSEXT_VF4, riscv_instr_format_t.VS2_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV, g=globals())
+
 # RVV 1.0 section 11.5: vector bitwise logical instructions
 DEFINE_VA_INSTR(riscv_instr_name_t.VAND, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.LOGICAL, riscv_instr_group_t.RVV,
@@ -49,6 +73,14 @@ DEFINE_VA_INSTR(riscv_instr_name_t.VSRL, riscv_instr_format_t.VA_FORMAT,
 DEFINE_VA_INSTR(riscv_instr_name_t.VSRA, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.SHIFT, riscv_instr_group_t.RVV,
                 [va_variant_t.VV, va_variant_t.VX, va_variant_t.VI], g=globals())
+
+# RVV 1.0 section 11.7: vector narrowing integer right shift instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VNSRL, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.SHIFT, riscv_instr_group_t.RVV,
+                [va_variant_t.WV, va_variant_t.WX, va_variant_t.WI], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VNSRA, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.SHIFT, riscv_instr_group_t.RVV,
+                [va_variant_t.WV, va_variant_t.WX, va_variant_t.WI], g=globals())
 
 # RVV 1.0 section 11.8: vector integer compare instructions, the .vi forms of vmslt(u)
 # and the .vv forms of vmsgt(u) do not exist

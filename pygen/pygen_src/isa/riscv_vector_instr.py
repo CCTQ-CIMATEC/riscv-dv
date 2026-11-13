@@ -49,14 +49,24 @@ class riscv_vector_instr(riscv_instr):
         self.mask_required = vsc.bit_t(1)
         # The destination may overlap v0 when masked: mask and scalar-like results
         self.vd_may_overlap_v0 = vsc.bit_t(1)
-        # The destination EEW is narrower than the source EEW: mask results of compares
-        self.narrow_dest = vsc.bit_t(1)
+        # vd has a narrower EEW than vs2 or vs1: compare masks and narrowing results
+        self.vd_narrower_vs2 = vsc.bit_t(1)
+        self.vd_narrower_vs1 = vsc.bit_t(1)
+        # vd has a wider EEW than vs2 or vs1: widening and integer extension results
+        self.vd_wider_vs2 = vsc.bit_t(1)
+        self.vd_wider_vs1 = vsc.bit_t(1)
+        # The narrower source has a fractional EMUL and takes part of one register
+        self.src_emul_fractional = vsc.bit_t(1)
         # vs1 is an operand of the drawn variant, set in pre_randomize
         self.has_vs1 = vsc.bit_t(1, 1)
         # Element width of loads and stores, encoded in the mnemonic
         self.eew = 8
         self.sub_extension = ""
         self.is_reduction_instr = 0
+        self.is_widening_instr = 0
+        self.is_narrowing_instr = 0
+        # Source EEW divisor of vzext/vsext: 2 for .vf2, 4 for .vf4
+        self.ext_factor = 1
 
     # RVV 1.0 section 3.4.2: a register group starts at a register aligned to its size
     @vsc.constraint
@@ -70,12 +80,24 @@ class riscv_vector_instr(riscv_instr):
     # in its lowest-numbered registers, so vd either starts the group or stays out of it
     @vsc.constraint
     def narrow_dest_overlap_c(self):
-        with vsc.if_then(self.narrow_dest == 1):
+        with vsc.if_then(self.vd_narrower_vs2 == 1):
             ((self.vd == self.vs2) | (self.vd + self.vd_grp <= self.vs2) |
              (self.vd >= self.vs2 + self.vs2_grp))
-            with vsc.if_then(self.has_vs1 == 1):
-                ((self.vd == self.vs1) | (self.vd + self.vd_grp <= self.vs1) |
-                 (self.vd >= self.vs1 + self.vs1_grp))
+        with vsc.if_then((self.vd_narrower_vs1 == 1) & (self.has_vs1 == 1)):
+            ((self.vd == self.vs1) | (self.vd + self.vd_grp <= self.vs1) |
+             (self.vd >= self.vs1 + self.vs1_grp))
+
+    # RVV 1.0 section 5.2: a destination with a wider EEW may overlap a source group only in
+    # its highest-numbered registers, and only when the source EMUL is at least 1
+    @vsc.constraint
+    def wide_dest_overlap_c(self):
+        with vsc.if_then(self.vd_wider_vs2 == 1):
+            ((self.vs2 + self.vs2_grp <= self.vd) | (self.vs2 >= self.vd + self.vd_grp) |
+             ((self.src_emul_fractional == 0) &
+              (self.vs2 + self.vs2_grp == self.vd + self.vd_grp)))
+        with vsc.if_then((self.vd_wider_vs1 == 1) & (self.has_vs1 == 1)):
+            ((self.vs1 + self.vs1_grp <= self.vd) | (self.vs1 >= self.vd + self.vd_grp) |
+             (self.vs1 + self.vs1_grp == self.vd + self.vd_grp))
 
     # RVV 1.0 section 5.3: a masked destination cannot overlap v0, except for mask results and the
     # scalar destination of reductions
@@ -98,16 +120,27 @@ class riscv_vector_instr(riscv_instr):
         if self.instr_name.name.endswith("_VS"):
             self.is_reduction_instr = 1
             self.vd_may_overlap_v0 = 1
+        name = self.instr_name.name
         if self.category == riscv_instr_category_t.COMPARE:
-            self.narrow_dest = 1
+            self.vd_narrower_vs2 = 1
+            self.vd_narrower_vs1 = 1
             self.vd_may_overlap_v0 = 1
+        # vw* except the vwred*.vs reductions
+        if name.startswith("VW") and not self.is_reduction_instr:
+            self.is_widening_instr = 1
+            self.vd_wider_vs1 = 1
+        if name in ["VNSRL", "VNSRA", "VNCLIPU", "VNCLIP"]:
+            self.is_narrowing_instr = 1
+            self.vd_narrower_vs2 = 1
+        if name.startswith("VZEXT") or name.startswith("VSEXT"):
+            self.ext_factor = int(name[-1])
         if len(self.va_variants) > 0:
             self.has_va_variant = 1
         if self.format == riscv_instr_format_t.VA_FORMAT:
             # Superset of all variants: rs1 for .vx and imm for .vi
             self.has_rs1 = 1
-            self.has_imm = int(va_variant_t.VI in self.va_variants or
-                               va_variant_t.VIM in self.va_variants)
+            self.has_imm = int(any(v in self.va_variants for v in
+                                   [va_variant_t.VI, va_variant_t.VIM, va_variant_t.WI]))
         if self.instr_name == riscv_instr_name_t.VMV:
             self.mask_enable = 0
         if self.instr_name == riscv_instr_name_t.VMERGE:
@@ -126,10 +159,38 @@ class riscv_vector_instr(riscv_instr):
             self.imm_type = imm_t.UIMM
         self.imm_mask = (self.imm_mask << self.imm_len) & self.shift_t
 
-    # Register group sizes from the vtype of the test and, for loads and stores, the EEW
+    # Filter the instructions the vtype of the test makes illegal
+    def is_supported(self, cfg):
+        vector_cfg = cfg.vector_cfg
+        # 2*SEW results or sources need 2*SEW <= ELEN and 2*LMUL <= 8
+        if ((self.is_widening_instr or self.is_narrowing_instr) and
+                not vector_cfg.vec_narrowing_widening):
+            return 0
+        # RVV 1.0 section 11.3: the source EEW SEW/vf2 or SEW/vf4 is at least 8
+        if vector_cfg.vsew // self.ext_factor < 8:
+            return 0
+        return 1
+
+    # Register group sizes from the vtype of the test, the drawn variant and, for loads and
+    # stores, the EEW
     def update_operand_groups(self):
         lmul = cfg.vector_cfg.vlmul
         vd_grp = vs1_grp = vs2_grp = vs3_grp = lmul
+        vd_wider_vs2 = 0
+        if self.is_widening_instr:
+            vd_grp = 2 * lmul
+            # .wv and .wx take a 2*SEW vs2, with the EEW of vd
+            if self.va_variant in [va_variant_t.WV, va_variant_t.WX]:
+                vs2_grp = 2 * lmul
+            else:
+                vd_wider_vs2 = 1
+        if self.is_narrowing_instr:
+            vs2_grp = 2 * lmul
+        if self.ext_factor > 1:
+            vs2_grp = max(1, lmul // self.ext_factor)
+            vd_wider_vs2 = 1
+            self.src_emul_fractional = int(lmul < self.ext_factor)
+        self.vd_wider_vs2 = vd_wider_vs2
         if self.is_reduction_instr:
             # RVV 1.0 section 14: vd and vs1 hold a single element
             vd_grp = vs1_grp = 1
@@ -158,7 +219,9 @@ class riscv_vector_instr(riscv_instr):
         super().pre_randomize()
         if self.has_va_variant:
             self.va_variant = random.choice(self.va_variants)
-            self.has_vs1 = int(self.va_variant in [va_variant_t.VV, va_variant_t.VVM])
+            self.has_vs1 = int(self.va_variant in [va_variant_t.VV, va_variant_t.VVM,
+                                                   va_variant_t.WV])
+            self.update_operand_groups()
 
     def get_instr_name(self):
         name = super().get_instr_name()
@@ -176,11 +239,11 @@ class riscv_vector_instr(riscv_instr):
         if self.format == riscv_instr_format_t.VA_FORMAT:
             if self.has_va_variant:
                 # Last source operand: a vector register, x register or immediate
-                if self.va_variant in [va_variant_t.VV, va_variant_t.VVM]:
+                if self.va_variant in [va_variant_t.VV, va_variant_t.VVM, va_variant_t.WV]:
                     src = vs1
-                elif self.va_variant in [va_variant_t.VX, va_variant_t.VXM]:
+                elif self.va_variant in [va_variant_t.VX, va_variant_t.VXM, va_variant_t.WX]:
                     src = self.rs1.name
-                elif self.va_variant in [va_variant_t.VI, va_variant_t.VIM]:
+                elif self.va_variant in [va_variant_t.VI, va_variant_t.VIM, va_variant_t.WI]:
                     src = self.get_imm()
                 else:
                     logging.critical("Unsupported va_variant %0s of %0s",
@@ -198,6 +261,9 @@ class riscv_vector_instr(riscv_instr):
                 asm_str = pkg_ins.format_string(self.get_instr_name(),
                                                 pkg_ins.MAX_INSTR_STR_LEN)
                 operands = [vd, vs2, vs1]
+        elif self.format == riscv_instr_format_t.VS2_FORMAT:
+            asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
+            operands = [vd, vs2]
         elif self.format == riscv_instr_format_t.VL_FORMAT:
             asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
             operands = [vd, "({})".format(self.rs1.name)]
