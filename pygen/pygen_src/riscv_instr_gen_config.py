@@ -21,6 +21,7 @@ from pygen_src.riscv_instr_pkg import (mtvec_mode_t, f_rounding_mode_t,
                                        riscv_instr_group_t, data_pattern_t,
                                        riscv_instr_category_t, satp_mode_t,
                                        mem_region_t, vreg_init_method_t)
+from pygen_src.riscv_vector_cfg import riscv_vector_cfg
 
 
 # ----------------------------------------------------------------------------
@@ -49,15 +50,6 @@ class riscv_instr_gen_config:
 
         # Pattern of data section: RAND_DATA, ALL_ZERO, INCR_VAL
         self.data_page_pattern = vsc.rand_enum_t(data_pattern_t)
-
-        # Initialization of the vregs
-        # SAME_VALUES_ALL_ELEMS - Using vmv.v.x to fill all the elements of the vreg with
-        # the same value as the one in the GPR selected
-        # RANDOM_VALUES_VMV     - Using vmv.v.x + vslide1up.vx to randomize the contents
-        # of each vector element
-        # RANDOM_VALUES_LOAD    - Using vle.v, same approach as RANDOM_VALUES_VMV but more
-        # efficient for big VLEN
-        self.vreg_init_method = vreg_init_method_t.RANDOM_VALUES_VMV
 
         # Maximum directed instruction stream sequence count
         self.max_directed_instr_stream_seq = 20
@@ -137,8 +129,8 @@ class riscv_instr_gen_config:
         # Virtual address translation is on for this test
         self.virtual_addr_translation_on = vsc.rand_bit_t(1)
 
-        # Commenting out for now
-        # vector_cfg = riscv_vector_cfg  # TODO
+        # Randomized in post_randomize, after enable_vector_extension is known
+        self.vector_cfg = None
         # pmp_cfg = riscv_pmp_cfg  # TODO
 
         # Stack section word length
@@ -282,9 +274,18 @@ class riscv_instr_gen_config:
         self.enable_floating_point = vsc.bit_t(1)
         self.enable_floating_point = self.argv.enable_floating_point
         # Vector extension support
-        self.enable_vector_extension = self.argv.enable_vector_extension
+        self.enable_vector_extension = int(self.argv.enable_vector_extension == 1 and
+                                           riscv_instr_group_t.RVV in rcs.supported_isa)
         # Only generate vector instructions
-        self. vector_instr_only = vsc.bit_t(1)
+        self.vector_instr_only = self.argv.vector_instr_only
+        # Initialization of the vregs
+        # SAME_VALUES_ALL_ELEMS - Using vmv.v.x to fill all the elements of the vreg with
+        # the same value as the one in the GPR selected
+        # RANDOM_VALUES_VMV     - Using vmv.v.x + vslide1up.vx to randomize the contents
+        # of each vector element
+        # RANDOM_VALUES_LOAD    - Using vle32.v from a random data block, which needs only
+        # unit-stride loads
+        self.vreg_init_method = vreg_init_method_t[self.argv.vreg_init_method]
         # Bit manipulation extension support
         self.enable_b_extension = self.argv.enable_b_extension
         self.enable_bitmanip_groups = self.argv.enable_bitmanip_groups
@@ -475,6 +476,12 @@ class riscv_instr_gen_config:
         self.min_stack_len_per_program = 2 * (rcs.XLEN // 8)
         logging.info("min_stack_len_per_program value = {}"
                      .format(self.min_stack_len_per_program))
+        if self.enable_vector_extension:
+            # Set outside the constraints, which keeps the solver model and the scalar
+            # programs of existing seeds unchanged
+            self.mstatus_vs = 1
+            self.vector_cfg = riscv_vector_cfg(rcs)
+            self.vector_cfg.randomize()
         self.check_setting()  # check if the setting is legal
 
     def check_setting(self):
@@ -640,6 +647,11 @@ class riscv_instr_gen_config:
                            choices = [0, 1], type = int, default = 0)
         parse.add_argument('--enable_vector_extension', help = 'enable_vector_extension',
                            choices = [0, 1], type = int, default = 0)
+        parse.add_argument('--vector_instr_only', help = 'vector_instr_only',
+                           choices = [0, 1], type = int, default = 0)
+        parse.add_argument('--vreg_init_method', help = 'vreg_init_method',
+                           choices = [i.name for i in vreg_init_method_t],
+                           default = vreg_init_method_t.RANDOM_VALUES_LOAD.name)
         parse.add_argument('--enable_b_extension', help = 'enable_b_extension',
                            choices = [0, 1], type = int, default = 0)
         parse.add_argument('--enable_bitmanip_groups', help = 'enable_bitmanip_groups',

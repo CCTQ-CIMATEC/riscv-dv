@@ -143,6 +143,9 @@ class riscv_instr:
         for instr_name, instr_group in cls.instr_registry.items():
             if instr_name in rcs.unsupported_instr:
                 continue
+            # Vector templates read cfg.vector_cfg, which exists only with the extension enabled
+            if instr_group == riscv_instr_group_t.RVV and not cfg.enable_vector_extension:
+                continue
             instr_inst = cls.create_instr(instr_name, instr_group)
             cls.instr_template[instr_name] = instr_inst
 
@@ -159,12 +162,19 @@ class riscv_instr:
             if instr_name in [riscv_instr_name_t.FENCE, riscv_instr_name_t.FENCE_I,
                               riscv_instr_name_t.SFENCE_VMA]:
                 continue
+            is_vector = instr_inst.group == riscv_instr_group_t.RVV
             if (instr_inst.group in rcs.supported_isa and
                     not(cfg.disable_compressed_instr and
                     instr_inst.group.name in ["RV32C", "RV64C", "RV32DC",
                                               "RV32FC", "RV128C"]) and
                     not(not(cfg.enable_floating_point) and instr_inst.group.name in
-                    ["RV32F", "RV64F", "RV32D", "RV64D"])):
+                    ["RV32F", "RV64F", "RV32D", "RV64D"]) and
+                    not (cfg.vector_instr_only and not is_vector)):
+                # Vector loads and stores need an aligned base register, set up by
+                # riscv_vector_load_store_instr_stream from instr_template
+                if is_vector and instr_inst.category in [riscv_instr_category_t.LOAD,
+                                                         riscv_instr_category_t.STORE]:
+                    continue
                 cls.instr_category[instr_inst.category.name].append(instr_name)
                 cls.instr_group[instr_inst.group.name].append(instr_name)
                 cls.instr_names.append(instr_name)
