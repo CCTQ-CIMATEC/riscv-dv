@@ -423,6 +423,7 @@ class riscv_instr_name_t(IntEnum):
     # Vector instructions
     VSETVL = auto()
     VSETVLI = auto()
+    VSETIVLI = auto()
     VADD = auto()
     VSUB = auto()
     VRSUB = auto()

@@ -171,9 +171,12 @@ class riscv_instr:
                     ["RV32F", "RV64F", "RV32D", "RV64D"]) and
                     not (cfg.vector_instr_only and not is_vector)):
                 # Vector loads and stores need an aligned base register, set up by
-                # riscv_vector_load_store_instr_stream from instr_template
+                # riscv_vector_load_store_instr_stream, and vsetvli/vsetivli keep the vtype
+                # of the test only through riscv_vector_vsetvli_instr_stream; both streams
+                # take them from instr_template
                 if is_vector and instr_inst.category in [riscv_instr_category_t.LOAD,
-                                                         riscv_instr_category_t.STORE]:
+                                                         riscv_instr_category_t.STORE,
+                                                         riscv_instr_category_t.CSR]:
                     continue
                 cls.instr_category[instr_inst.category.name].append(instr_name)
                 cls.instr_group[instr_inst.group.name].append(instr_name)

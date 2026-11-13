@@ -19,7 +19,8 @@ from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.riscv_loop_instr import riscv_loop_instr
 from pygen_src.riscv_directed_instr_lib import (riscv_directed_instr_stream,
                                                 riscv_int_numeric_corner_stream,
-                                                riscv_jal_instr, riscv_mem_access_stream)
+                                                riscv_jal_instr, riscv_mem_access_stream,
+                                                riscv_vector_vsetvli_instr_stream)
 from pygen_src.riscv_amo_instr_lib import (riscv_lr_sc_instr_stream, riscv_amo_instr_stream)
 from pygen_src.riscv_load_store_instr_lib import (riscv_load_store_rand_instr_stream,
                                                   riscv_load_store_hazard_instr_stream,
@@ -45,6 +46,7 @@ def factory(obj_of):
         "riscv_load_store_stress_instr_stream": riscv_load_store_stress_instr_stream,
         "riscv_single_load_store_instr_stream": riscv_single_load_store_instr_stream,
         "riscv_vector_load_store_instr_stream": riscv_vector_load_store_instr_stream,
+        "riscv_vector_vsetvli_instr_stream": riscv_vector_vsetvli_instr_stream,
         "riscv_loop_instr": riscv_loop_instr
     }
 

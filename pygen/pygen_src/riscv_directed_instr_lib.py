@@ -348,3 +348,56 @@ class riscv_pop_stack_instr(riscv_rand_instr_stream):
         for i in range(len(self.instr_list)):
             self.instr_list[i].atomic = 1
             self.instr_list[i].has_label = 0
+
+
+# vsetvli and vsetivli with the vtype of the test and a random AVL, which changes vl only
+# AVL is 0, at most VLMAX or at least 2 * VLMAX: between VLMAX and 2 * VLMAX, RVV 1.0
+# section 6.3 lets the implementation pick vl
+@vsc.randobj
+class riscv_vector_vsetvli_instr_stream(riscv_directed_instr_stream):
+    def __init__(self):
+        super().__init__()
+
+    def rand_avl(self, limit):
+        vlmax = cfg.vector_cfg.vl
+        ranges = [(0, 0, 1), (1, min(vlmax, limit), 6)]
+        if 2 * vlmax <= limit:
+            ranges.append((2 * vlmax, limit, 2))
+        lo, hi, _ = random.choices(ranges, weights = [r[2] for r in ranges])[0]
+        return random.randint(lo, hi)
+
+    def rand_gpr(self, allow_zero):
+        excluded = [*cfg.reserved_regs, *self.reserved_rd]
+        if not allow_zero:
+            excluded.append(riscv_reg_t.ZERO)
+        return random.choice([reg for reg in riscv_reg_t if reg not in excluded])
+
+    # The operands are assigned without randomize_with: after inline rd/rs1 constraints on a
+    # vsetvli, pyvsc occasionally failed to solve later vector instructions that constrain rd
+    def post_randomize(self):
+        form = random.choice(["vsetivli", "vsetvli_avl", "vsetvli_vlmax", "vsetvli_keep"])
+        rd = self.rand_gpr(allow_zero = True)
+        if form == "vsetivli":
+            instr = riscv_instr.get_instr(riscv_instr_name_t.VSETIVLI)
+            instr.imm = self.rand_avl(31)
+            instr.update_imm_str()
+        else:
+            instr = riscv_instr.get_instr(riscv_instr_name_t.VSETVLI)
+            rs1 = riscv_reg_t.ZERO
+            if form == "vsetvli_avl":
+                rs1 = self.rand_gpr(allow_zero = False)
+                li_instr = riscv_pseudo_instr()
+                li_instr.pseudo_instr_name = riscv_pseudo_instr_name_t.LI
+                li_instr.rd = rs1
+                li_instr.imm_str = str(self.rand_avl(2 ** 31 - 1))
+                self.instr_list.append(li_instr)
+            elif form == "vsetvli_vlmax":
+                # rs1 = x0 with rd != x0 sets vl = VLMAX
+                rd = self.rand_gpr(allow_zero = False)
+            else:
+                # rs1 = x0 with rd = x0 keeps vl, legal while VLMAX is unchanged
+                rd = riscv_reg_t.ZERO
+            instr.rs1 = rs1
+        instr.rd = rd
+        self.instr_list.append(instr)
+        super().post_randomize()

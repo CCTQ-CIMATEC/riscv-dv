@@ -17,6 +17,12 @@ from pygen_src.riscv_instr_pkg import (riscv_instr_name_t, riscv_instr_format_t,
 
 # RVV 1.0 integer instructions of the Zve32x subset, named after the group by create_instr
 
+# RVV 1.0 section 6: configuration-setting instructions, vsetvl is left out
+DEFINE_VA_INSTR(riscv_instr_name_t.VSETVLI, riscv_instr_format_t.VSET_FORMAT,
+                riscv_instr_category_t.CSR, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSETIVLI, riscv_instr_format_t.VSET_FORMAT,
+                riscv_instr_category_t.CSR, riscv_instr_group_t.RVV, g=globals())
+
 # RVV 1.0 section 11.1: vector single-width integer add and subtract
 DEFINE_VA_INSTR(riscv_instr_name_t.VADD, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,

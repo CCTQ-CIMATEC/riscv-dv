@@ -151,6 +151,12 @@ class riscv_vector_instr(riscv_instr):
             self.has_rd = 1
         if name in ["VMV_X_S", "VMV_S_X"]:
             self.mask_enable = 0
+        if self.format == riscv_instr_format_t.VSET_FORMAT:
+            # vsetvli rd, rs1, vtype and vsetivli rd, uimm, vtype with the vtype of the test
+            self.has_rd = 1
+            self.has_rs1 = int(self.instr_name == riscv_instr_name_t.VSETVLI)
+            self.has_imm = int(self.instr_name == riscv_instr_name_t.VSETIVLI)
+            self.mask_enable = 0
         if len(self.va_variants) > 0:
             self.has_va_variant = 1
         if self.format == riscv_instr_format_t.VA_FORMAT and not self.has_scalar_rd:
@@ -170,9 +176,10 @@ class riscv_vector_instr(riscv_instr):
         self.update_operand_groups()
 
     def set_imm_len(self):
-        # simm5, or uimm5 for shifts
+        # simm5, or uimm5 for shifts and the AVL of vsetivli
         self.imm_len = 5
-        if self.category == riscv_instr_category_t.SHIFT:
+        if (self.category == riscv_instr_category_t.SHIFT or
+                self.instr_name == riscv_instr_name_t.VSETIVLI):
             self.imm_type = imm_t.UIMM
         self.imm_mask = (self.imm_mask << self.imm_len) & self.shift_t
 
@@ -264,7 +271,11 @@ class riscv_vector_instr(riscv_instr):
         vs1 = "v{}".format(self.vs1)
         vs2 = "v{}".format(self.vs2)
         vs3 = "v{}".format(self.vs3)
-        if self.instr_name == riscv_instr_name_t.VMV_X_S:
+        if self.format == riscv_instr_format_t.VSET_FORMAT:
+            asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
+            avl = self.rs1.name if self.has_rs1 else self.get_imm()
+            operands = [self.rd.name, avl, cfg.vector_cfg.vtype_str()]
+        elif self.instr_name == riscv_instr_name_t.VMV_X_S:
             asm_str = pkg_ins.format_string(self.get_instr_name(), pkg_ins.MAX_INSTR_STR_LEN)
             operands = [self.rd.name, vs2]
         elif self.instr_name == riscv_instr_name_t.VMV_S_X:
@@ -311,7 +322,8 @@ class riscv_vector_instr(riscv_instr):
             logging.critical("Unsupported vector format %0s of %0s",
                              self.format.name, self.instr_name.name)
             sys.exit(1)
-        if not self.vm:
+        # vsetvli and vsetivli have no vm field
+        if not self.vm and self.format != riscv_instr_format_t.VSET_FORMAT:
             operands.append("v0" if self.mask_required else "v0.t")
         asm_str = "{} {}".format(asm_str, ", ".join(operands))
         if self.comment != "":
