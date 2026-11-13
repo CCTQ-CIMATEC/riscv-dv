@@ -75,6 +75,10 @@ class riscv_data_page_gen:
                     self.data_page_str.append(".section .{},\"aw\",@progbits;"
                                               .format(pkg_ins.hart_prefix(hart_id) +
                                                       self.mem_region_setting[i].name))
+                # Vector loads and stores need an aligned base address
+                if cfg.enable_vector_extension:
+                    self.data_page_str.append(".align {}".format(
+                        (cfg.vector_cfg.load_store_alignment - 1).bit_length()))
                 self.data_page_str.append("{}:".format(pkg_ins.hart_prefix(hart_id) +
                                                        self.mem_region_setting[i].name))
             page_size = self.mem_region_setting[i].size_in_bytes

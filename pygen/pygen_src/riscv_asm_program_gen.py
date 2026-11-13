@@ -22,7 +22,8 @@ from pygen_src.riscv_callstack_gen import riscv_callstack_gen
 from pygen_src.riscv_instr_pkg import (pkg_ins, privileged_reg_t,
                                        privileged_mode_t, mtvec_mode_t,
                                        misa_ext_t, riscv_instr_group_t,
-                                       satp_mode_t, exception_cause_t)
+                                       satp_mode_t, exception_cause_t,
+                                       vreg_init_method_t)
 from pygen_src.riscv_signature_pkg import (signature_type_t, core_status_t,
                                            test_result_t)
 from pygen_src.riscv_instr_gen_config import cfg
@@ -144,6 +145,9 @@ class riscv_asm_program_gen:
         for hart in range(cfg.num_of_harts):
             # Starting point of data section
             self.gen_data_page_begin(hart)
+            if (cfg.enable_vector_extension and
+                    cfg.vreg_init_method == vreg_init_method_t.RANDOM_VALUES_LOAD):
+                self.gen_vreg_init_data(hart)
             if not cfg.no_data_page:
                 # User data section
                 self.gen_data_page(hart)
@@ -346,7 +350,7 @@ class riscv_asm_program_gen:
             pkg_ins.indent, cfg.sp, pkg_ins.hart_prefix(hart))
         self.instr_stream.append(init_string)
         if cfg.enable_vector_extension:
-            self.randomize_vec_gpr_and_csr()
+            self.randomize_vec_gpr_and_csr(hart)
         self.core_is_initialized()
         self.gen_dummy_csr_write()
         if self.bare_program_traps():
@@ -452,9 +456,44 @@ class riscv_asm_program_gen:
                                                            hex(reg_val.get_val())))
 
     # Initialize vector general purpose registers
-    def init_vec_gpr(self):
-        # TODO
-        pass
+    # Runs with a temporary SEW = min(ELEN, XLEN), LMUL = 1 setting, replaced by the test
+    # setting in randomize_vec_gpr_and_csr
+    def init_vec_gpr(self, hart):
+        sew = min(rcs.ELEN, rcs.XLEN)
+        num_elements = rcs.VLEN // sew
+        # rs1 = x0 with rd != x0 sets vl = VLMAX
+        self.instr_stream.append("{}vsetvli x{}, x0, {}".format(
+            pkg_ins.indent, cfg.gpr[1], cfg.vector_cfg.vtype_str(sew, 1)))
+        if cfg.vreg_init_method == vreg_init_method_t.SAME_VALUES_ALL_ELEMS:
+            for v in range(rcs.NUM_VEC_GPR):
+                self.instr_stream.append("{}vmv.v.x v{}, x{}".format(pkg_ins.indent, v, v))
+        elif cfg.vreg_init_method == vreg_init_method_t.RANDOM_VALUES_VMV:
+            for v in range(rcs.NUM_VEC_GPR):
+                # v0 holds the previous contents while vslide1up inserts each new element
+                for e in range(num_elements):
+                    if e > 0:
+                        self.instr_stream.append("{}vmv.v.v v0, v{}".format(pkg_ins.indent, v))
+                    self.instr_stream.append("{}li x{}, {}".format(
+                        pkg_ins.indent, cfg.gpr[0], hex(random.getrandbits(sew))))
+                    self.instr_stream.append("{}vslide1up.vx v{}, v{}, x{}".format(
+                        pkg_ins.indent, v, 1 if v == 0 else 0, cfg.gpr[0]))
+        else:
+            # One VLEN/8 block of vreg_init_data per register
+            self.instr_stream.append("{}la x{}, {}vreg_init_data".format(
+                pkg_ins.indent, cfg.gpr[0], pkg_ins.hart_prefix(hart)))
+            for v in range(rcs.NUM_VEC_GPR):
+                self.instr_stream.append("{}vle{}.v v{}, (x{})".format(
+                    pkg_ins.indent, sew, v, cfg.gpr[0]))
+                self.instr_stream.append("{}addi x{}, x{}, {}".format(
+                    pkg_ins.indent, cfg.gpr[0], cfg.gpr[0], rcs.VLEN // 8))
+
+    # Random contents of all vector registers for RANDOM_VALUES_LOAD
+    def gen_vreg_init_data(self, hart):
+        self.instr_stream.extend((".align 6",
+                                  "{}vreg_init_data:".format(pkg_ins.hart_prefix(hart))))
+        words = [hex(random.getrandbits(32)) for i in range(rcs.NUM_VEC_GPR * rcs.VLEN // 32)]
+        for i in range(0, len(words), 8):
+            self.instr_stream.append(".word {}".format(", ".join(words[i:i + 8])))
 
     # Initialize floating point general purpose registers
     def init_floating_point_gpr(self):
@@ -1236,6 +1275,19 @@ class riscv_asm_program_gen:
     # Vector extension generation
     # ----------------------------------------------------------------------------------
 
-    def randomize_vec_gpr_and_csr(self):
-        # TODO
-        pass
+    def randomize_vec_gpr_and_csr(self, hart):
+        vector_cfg = cfg.vector_cfg
+        # Vector instructions and CSRs are illegal while mstatus.VS is Off, and a bare
+        # program skips the privileged setup that writes it, so set VS to Initial here
+        self.instr_stream.extend((
+            "{}li x{}, {}".format(pkg_ins.indent, cfg.gpr[0], hex(0x200)),
+            "{}csrs {}, x{}".format(pkg_ins.indent, hex(privileged_reg_t.MSTATUS), cfg.gpr[0]),
+            "{}csrwi {}, {}".format(pkg_ins.indent, hex(privileged_reg_t.VXSTAT),
+                                    vector_cfg.vxsat),
+            "{}csrwi {}, {}".format(pkg_ins.indent, hex(privileged_reg_t.VXRM),
+                                    vector_cfg.vxrm.value)))
+        self.init_vec_gpr(hart)
+        self.instr_stream.extend((
+            "{}li x{}, {}".format(pkg_ins.indent, cfg.gpr[1], vector_cfg.vl),
+            "{}vsetvli x{}, x{}, {}".format(pkg_ins.indent, cfg.gpr[0], cfg.gpr[1],
+                                            vector_cfg.vtype_str())))
