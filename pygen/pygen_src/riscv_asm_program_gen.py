@@ -139,6 +139,8 @@ class riscv_asm_program_gen:
                 if rcs.support_debug_mode:
                     self.gen_debug_rom(hart)
                 self.gen_section(pkg_ins.hart_prefix(hart) + "instr_end", ["nop"])
+            elif self.bare_program_traps():
+                self.gen_bare_trap_handler(hart)
         for hart in range(cfg.num_of_harts):
             # Starting point of data section
             self.gen_data_page_begin(hart)
@@ -347,6 +349,12 @@ class riscv_asm_program_gen:
             self.randomize_vec_gpr_and_csr()
         self.core_is_initialized()
         self.gen_dummy_csr_write()
+        if self.bare_program_traps():
+            self.instr_stream.extend((
+                "{}la x{}, {}bare_trap_handler".format(pkg_ins.indent, cfg.scratch_reg,
+                                                       pkg_ins.hart_prefix(hart)),
+                "{}csrw {}, x{} # MTVEC, direct mode".format(
+                    pkg_ins.indent, hex(privileged_reg_t.MTVEC), cfg.scratch_reg)))
         if rcs.support_pmp:
             init_string = pkg_ins.indent + "j main"
             self.instr_stream.append(init_string)
@@ -912,6 +920,42 @@ class riscv_asm_program_gen:
                                           cfg.mstatus_mprv, cfg.sp, cfg.tp, instr)
         instr.append("mret")
         self.gen_section(pkg_ins.get_label("illegal_instr_handler", hart), instr)
+
+    # A bare program has no kernel sections, hence no trap handler. One that can trap
+    # (illegal instructions, random ebreak) gets the small M-mode handler below instead.
+    def bare_program_traps(self):
+        return cfg.bare_program_mode and (cfg.illegal_instr_ratio > 0 or not cfg.no_ebreak)
+
+    # Resumes after an illegal instruction or ebreak at mepc + 4, like the kernel handlers.
+    # It needs no stack and no mscratch: it only uses scratch_reg and tp, which the random
+    # program never writes (a bare program sets up no kernel stack in tp). Any other trap ends
+    # the test with tohost = ((0x100 | mcause[7:0]) << 1) | 1, i.e. test number 0x1XX.
+    def gen_bare_trap_handler(self, hart):
+        scratch = "x{}".format(cfg.scratch_reg)
+        tmp = "x{}".format(cfg.tp)
+        prefix = pkg_ins.hart_prefix(hart)
+        self.instr_stream.append(".align 2")
+        self.gen_section(prefix + "bare_trap_handler", [
+            "csrr {}, {} # MCAUSE".format(scratch, hex(privileged_reg_t.MCAUSE)),
+            # Interrupts are never enabled in a bare program
+            "bltz {}, {}bare_trap_fail".format(scratch, prefix),
+            "li {}, {} # ILLEGAL_INSTRUCTION".format(
+                tmp, hex(exception_cause_t.ILLEGAL_INSTRUCTION)),
+            "beq {}, {}, {}bare_trap_skip".format(scratch, tmp, prefix),
+            "li {}, {} # BREAKPOINT".format(tmp, hex(exception_cause_t.BREAKPOINT)),
+            "bne {}, {}, {}bare_trap_fail".format(scratch, tmp, prefix)])
+        self.gen_section(prefix + "bare_trap_skip", [
+            "csrr {}, {} # MEPC".format(scratch, hex(privileged_reg_t.MEPC)),
+            "addi {}, {}, 4".format(scratch, scratch),
+            "csrw {}, {} # MEPC".format(hex(privileged_reg_t.MEPC), scratch),
+            "mret"])
+        self.gen_section(prefix + "bare_trap_fail", [
+            "andi gp, {}, 0xff".format(scratch),
+            "ori gp, gp, 0x100",
+            "slli gp, gp, 1",
+            "ori gp, gp, 1",
+            "la {}, write_tohost".format(scratch),
+            "jalr x0, {}, 0".format(scratch)])
 
     # TODO: handshake correct csr based on delegation
     def gen_instr_fault_handler(self, hart):

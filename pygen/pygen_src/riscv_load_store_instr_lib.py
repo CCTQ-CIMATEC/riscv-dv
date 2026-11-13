@@ -77,28 +77,22 @@ class riscv_load_store_base_instr_stream(riscv_mem_access_stream):
         self.base in vsc.rangelist(vsc.rng(0, self.max_load_store_offset - 1))
 
     def randomize_offset(self):
-        addr_ = vsc.rand_int32_t()
-        offset_ = vsc.rand_int32_t()
         self.offset = [0] * self.num_load_store
         self.addr = [0] * self.num_load_store
         for i in range(self.num_load_store):
-            try:
-                if self.locality == locality_e.NARROW:
-                    offset_ = random.randrange(-16, 16)
-                elif self.locality == locality_e.HIGH:
-                    offset_ = random.randrange(-64, 64)
-                elif self.locality == locality_e.MEDIUM:
-                    offset_ = random.randrange(-256, 256)
-                elif self.locality == locality_e.SPARSE:
-                    offset_ = random.randrange(-2048, 2047)
-                var1 = self.base + offset_ - 1
-                var2 = self.base + offset_ + 1
-                addr_ = random.randrange(var1, var2)
-            except Exception:
-                logging.critical("Cannot randomize load/store offset")
-                sys.exit(1)
-            self.offset[i] = offset_
-            self.addr[i] = addr_
+            self.offset[i], self.addr[i] = self.rand_offset_addr()
+
+    # One access, as the SV randomize_offset: addr == base + offset, inside the
+    # data page; the locality range (soft there) is clipped to the page. It
+    # always holds offset 0, since base is inside the page.
+    def rand_offset_addr(self):
+        lo, hi = {locality_e.NARROW: (-16, 16),
+                  locality_e.HIGH: (-64, 64),
+                  locality_e.MEDIUM: (-256, 256),
+                  locality_e.SPARSE: (-2048, 2047)}[self.locality]
+        offset_ = random.randint(max(lo, -self.base),
+                                 min(hi, self.max_load_store_offset - 1 - self.base))
+        return offset_, self.base + offset_
 
     def pre_randomize(self):
         super().pre_randomize()
@@ -109,6 +103,10 @@ class riscv_load_store_base_instr_stream(riscv_mem_access_stream):
             self.sp_rnd_order_c.constraint_mode(False)
 
     def post_randomize(self):
+        # rs1_c is not a pyvsc constraint (see the TODO above)
+        excluded = [riscv_reg_t.ZERO, *cfg.reserved_regs, *self.reserved_rd]
+        if self.rs1_reg in excluded:
+            self.rs1_reg = random.choice([reg for reg in riscv_reg_t if reg not in excluded])
         self.randomize_offset()
         # rs1 cannot be modified by other instructions
         if not(self.rs1_reg in self.reserved_rd):
@@ -130,9 +128,10 @@ class riscv_load_store_base_instr_stream(riscv_mem_access_stream):
         for i in range(len(self.addr)):
             # Assign the allowed load/store instructions based on address alignment
             # This is done separately rather than a constraint to improve the randomization
-            # performance
-            allowed_instr.extend(
-                [riscv_instr_name_t.LB, riscv_instr_name_t.LBU, riscv_instr_name_t.SB])
+            # performance. The list restarts for each access, as in the SV
+            # generator: one that grows would let an aligned access's LH/LW
+            # through for a later misaligned address.
+            allowed_instr = [riscv_instr_name_t.LB, riscv_instr_name_t.LBU, riscv_instr_name_t.SB]
             if not cfg.enable_unaligned_load_store:
                 if (self.addr[i] & 1) == 0:
                     allowed_instr.extend(
@@ -177,32 +176,32 @@ class riscv_load_store_base_instr_stream(riscv_mem_access_stream):
                                     (riscv_instr_group_t.RV32DC in rcs.supported_isa)):
                                 allowed_instr.extend(
                                     [riscv_instr_name_t.C_FLD, riscv_instr_name_t.C_FSD])
-                else:  # unalligned load/store
-                    allowed_instr.extend([riscv_instr_name_t.LW, riscv_instr_name_t.SW,
-                                          riscv_instr_name_t.LH, riscv_instr_name_t.LHU,
-                                          riscv_instr_name_t.SH])
-                    # Compressed load/store still needs to be alligned
-                    if (self.offset[i] in range(128) and (self.offset[i] % 4 == 0) and
-                        (riscv_instr_group_t.RV32C in rcs.supported_isa) and
+            else:  # unaligned load/store (enable_unaligned_load_store)
+                allowed_instr.extend([riscv_instr_name_t.LW, riscv_instr_name_t.SW,
+                                      riscv_instr_name_t.LH, riscv_instr_name_t.LHU,
+                                      riscv_instr_name_t.SH])
+                # Compressed load/store still needs to be alligned
+                if (self.offset[i] in range(128) and (self.offset[i] % 4 == 0) and
+                    (riscv_instr_group_t.RV32C in rcs.supported_isa) and
+                        enable_compressed_load_store):
+                    if self.rs1_reg == riscv_reg_t.SP:
+                        allowed_instr.extend(
+                            [riscv_instr_name_t.C_LWSP, riscv_instr_name_t.C_SWSP])
+                    else:
+                        allowed_instr.extend(
+                            [riscv_instr_name_t.C_LW, riscv_instr_name_t.C_SW])
+                if rcs.XLEN >= 64:
+                    allowed_instr.extend(
+                        [riscv_instr_name_t.LWU, riscv_instr_name_t.LD, riscv_instr_name_t.SD])
+                    if (self.offset[i] in range(256) and (self.offset[i] % 8 == 0) and
+                        (riscv_instr_group_t.RV64C in rcs.supported_isa) and
                             enable_compressed_load_store):
                         if self.rs1_reg == riscv_reg_t.SP:
                             allowed_instr.extend(
                                 [riscv_instr_name_t.C_LWSP, riscv_instr_name_t.C_SWSP])
                         else:
                             allowed_instr.extend(
-                                [riscv_instr_name_t.C_LW, riscv_instr_name_t.C_SW])
-                    if rcs.XLEN >= 64:
-                        allowed_instr.extend(
-                            [riscv_instr_name_t.LWU, riscv_instr_name_t.LD, riscv_instr_name_t.SD])
-                        if (self.offset[i] in range(256) and (self.offset[i] % 8 == 0) and
-                            (riscv_instr_group_t.RV64C in rcs.supported_isa) and
-                                enable_compressed_load_store):
-                            if self.rs1_reg == riscv_reg_t.SP:
-                                allowed_instr.extend(
-                                    [riscv_instr_name_t.C_LWSP, riscv_instr_name_t.C_SWSP])
-                            else:
-                                allowed_instr.extend(
-                                    [riscv_instr_name_t.C_LD, riscv_instr_name_t.C_SD])
+                                [riscv_instr_name_t.C_LD, riscv_instr_name_t.C_SD])
             instr = riscv_instr.get_load_store_instr(allowed_instr)
             instr.has_rs1 = 0
             instr.has_imm = 0
@@ -281,8 +280,6 @@ class riscv_load_store_hazard_instr_stream(riscv_load_store_base_instr_stream):
         self.num_mixed_instr.inside(vsc.rangelist(vsc.rng(1, 7)))
 
     def randomize_offset(self):
-        addr_ = vsc.rand_int32_t()
-        offset_ = vsc.rand_int32_t()
         self.offset = [0] * self.num_load_store
         self.addr = [0] * self.num_load_store
         rand_num = random.randrange(0, 100)
@@ -291,20 +288,4 @@ class riscv_load_store_hazard_instr_stream(riscv_load_store_base_instr_stream):
                 self.offset[i] = self.offset[i - 1]
                 self.addr[i] = self.addr[i - 1]
             else:
-                try:
-                    if self.locality == locality_e.NARROW:
-                        offset_ = random.randrange(-16, 16)
-                    elif self.locality == locality_e.HIGH:
-                        offset_ = random.randrange(-64, 64)
-                    elif self.locality == locality_e.MEDIUM:
-                        offset_ = random.randrange(-256, 256)
-                    elif self.locality == locality_e.SPARSE:
-                        offset_ = random.randrange(-2048, 2047)
-                    var1 = self.base + offset_ - 1
-                    var2 = self.base + offset_ + 1
-                    addr_ = random.randrange(var1, var2)
-                except Exception:
-                    logging.critical("Cannot randomize load/store offset")
-                    sys.exit(1)
-                self.offset[i] = offset_
-                self.addr[i] = addr_
+                self.offset[i], self.addr[i] = self.rand_offset_addr()
