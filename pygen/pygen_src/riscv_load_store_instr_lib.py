@@ -21,8 +21,10 @@ from importlib import import_module
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.isa.riscv_instr import riscv_instr
 from pygen_src.riscv_directed_instr_lib import riscv_mem_access_stream
+from pygen_src.riscv_pseudo_instr import riscv_pseudo_instr
 from pygen_src.riscv_instr_pkg import (riscv_reg_t, riscv_instr_name_t, riscv_instr_group_t,
-                                       riscv_instr_category_t)
+                                       riscv_instr_category_t, riscv_pseudo_instr_name_t,
+                                       pkg_ins)
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 
 
@@ -292,16 +294,24 @@ class riscv_load_store_hazard_instr_stream(riscv_load_store_base_instr_stream):
                 self.offset[i], self.addr[i] = self.rand_offset_addr()
 
 
-# Vector loads and stores from one data page, port of the SV riscv_vector_load_store_instr_stream
-# for unit-stride accesses
+# Vector loads and stores in cfg.vector_mem_region, port of the SV
+# riscv_vector_load_store_instr_stream for unit-stride accesses
 # The base address is a multiple of cfg.vector_cfg.load_store_alignment and the accessed
-# bytes, vl * EEW / 8, stay inside the page
+# bytes, VLMAX * EEW / 8, stay inside the region
 @vsc.randobj
 class riscv_vector_load_store_instr_stream(riscv_mem_access_stream):
     def __init__(self):
         super().__init__()
         self.rs1_reg = riscv_reg_t.ZERO
         self.load_store_instr = None
+
+    def add_rs1_init_la_instr(self, gpr, idx, base = 0):
+        la_instr = riscv_pseudo_instr()
+        la_instr.pseudo_instr_name = riscv_pseudo_instr_name_t.LA
+        la_instr.rd = gpr
+        la_instr.imm_str = "{}{}+{}".format(pkg_ins.hart_prefix(self.hart),
+                                            cfg.vector_mem_region[idx].name, base)
+        self.instr_list.insert(0, la_instr)
 
     def post_randomize(self):
         vector_cfg = cfg.vector_cfg
@@ -315,8 +325,8 @@ class riscv_vector_load_store_instr_stream(riscv_mem_access_stream):
         self.load_store_instr = riscv_instr.get_instr(random.choice(allowed_instr))
         eew = random.choice(vector_cfg.legal_eew)
         self.load_store_instr.set_eew(eew)
-        data_page_id = random.randrange(0, self.max_data_page_id)
-        page_size = self.data_page[data_page_id].size_in_bytes
+        data_page_id = random.randrange(0, len(cfg.vector_mem_region))
+        page_size = cfg.vector_mem_region[data_page_id].size_in_bytes
         num_bytes = vector_cfg.vl * eew // 8
         align = vector_cfg.load_store_alignment
         if num_bytes > page_size:

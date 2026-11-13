@@ -119,6 +119,8 @@ class riscv_asm_program_gen:
             self.main_program[hart].generate_instr_stream()
             logging.info("Generating main program instruction stream...done")
             self.instr_stream.extend(self.main_program[hart].instr_string_list)
+            if cfg.enable_vector_extension and cfg.vreg_dump:
+                self.gen_vreg_dump(hart)
             """
             If PMP is supported, need to jump from end of main program
             to test_done section at the end of main_program, as the test_done
@@ -148,6 +150,8 @@ class riscv_asm_program_gen:
             if (cfg.enable_vector_extension and
                     cfg.vreg_init_method == vreg_init_method_t.RANDOM_VALUES_LOAD):
                 self.gen_vreg_init_data(hart)
+            if cfg.enable_vector_extension:
+                self.gen_vector_data(hart)
             if not cfg.no_data_page:
                 # User data section
                 self.gen_data_page(hart)
@@ -486,6 +490,38 @@ class riscv_asm_program_gen:
                     pkg_ins.indent, sew, v, cfg.gpr[0]))
                 self.instr_stream.append("{}addi x{}, x{}, {}".format(
                     pkg_ins.indent, cfg.gpr[0], cfg.gpr[0], rcs.VLEN // 8))
+
+    # Store v0-v31 to vreg_dump_data, one VLEN/8 block per register, so the final vector state
+    # reaches memory and the store checks of the testbench
+    def gen_vreg_dump(self, hart):
+        sew = min(rcs.ELEN, rcs.XLEN)
+        self.instr_stream.extend((
+            "{}vsetvli x{}, x0, {}".format(pkg_ins.indent, cfg.gpr[1],
+                                           cfg.vector_cfg.vtype_str(sew, 1)),
+            "{}la x{}, {}vreg_dump_data".format(pkg_ins.indent, cfg.gpr[0],
+                                                pkg_ins.hart_prefix(hart))))
+        for v in range(rcs.NUM_VEC_GPR):
+            self.instr_stream.extend((
+                "{}vse{}.v v{}, (x{})".format(pkg_ins.indent, sew, v, cfg.gpr[0]),
+                "{}addi x{}, x{}, {}".format(pkg_ins.indent, cfg.gpr[0], cfg.gpr[0],
+                                             rcs.VLEN // 8)))
+
+    # vector_region_0 for riscv_vector_load_store_instr_stream and vreg_dump_data, aligned for
+    # vector loads and stores
+    def gen_vector_data(self, hart):
+        prefix = pkg_ins.hart_prefix(hart)
+        align = (cfg.vector_cfg.load_store_alignment - 1).bit_length()
+        if "riscv_vector_load_store_instr_stream" in self.directed_instr_stream_ratio:
+            for region in cfg.vector_mem_region:
+                self.instr_stream.extend((".align {}".format(align),
+                                          "{}{}:".format(prefix, region.name)))
+                words = [hex(random.getrandbits(32)) for i in range(region.size_in_bytes // 4)]
+                for i in range(0, len(words), 8):
+                    self.instr_stream.append(".word {}".format(", ".join(words[i:i + 8])))
+        if cfg.vreg_dump:
+            self.instr_stream.extend((".align {}".format(align),
+                                      "{}vreg_dump_data:".format(prefix),
+                                      ".zero {}".format(rcs.NUM_VEC_GPR * rcs.VLEN // 8)))
 
     # Random contents of all vector registers for RANDOM_VALUES_LOAD
     def gen_vreg_init_data(self, hart):

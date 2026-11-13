@@ -307,3 +307,5 @@ DEFINE_VA_INSTR(riscv_instr_name_t.VMV_S_X, riscv_instr_format_t.VA_FORMAT,
 # RVV 1.0 section 7.4: vector unit-stride loads and stores
 DEFINE_VA_INSTR(riscv_instr_name_t.VLE_V, riscv_instr_format_t.VL_FORMAT,
                 riscv_instr_category_t.LOAD, riscv_instr_group_t.RVV, g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSE_V, riscv_instr_format_t.VS_FORMAT,
+                riscv_instr_category_t.STORE, riscv_instr_group_t.RVV, g=globals())

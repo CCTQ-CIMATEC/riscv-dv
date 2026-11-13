@@ -131,6 +131,7 @@ class riscv_instr_gen_config:
 
         # Randomized in post_randomize, after enable_vector_extension is known
         self.vector_cfg = None
+        self.vector_mem_region = []
         # pmp_cfg = riscv_pmp_cfg  # TODO
 
         # Stack section word length
@@ -286,6 +287,8 @@ class riscv_instr_gen_config:
         # RANDOM_VALUES_LOAD    - Using vle32.v from a random data block, which needs only
         # unit-stride loads
         self.vreg_init_method = vreg_init_method_t[self.argv.vreg_init_method]
+        # Store all vector registers to vreg_dump_data at the end of the main program
+        self.vreg_dump = self.argv.vreg_dump
         # Bit manipulation extension support
         self.enable_b_extension = self.argv.enable_b_extension
         self.enable_bitmanip_groups = self.argv.enable_bitmanip_groups
@@ -482,6 +485,11 @@ class riscv_instr_gen_config:
             self.mstatus_vs = 1
             self.vector_cfg = riscv_vector_cfg(rcs)
             self.vector_cfg.randomize()
+            # Data region of riscv_vector_load_store_instr_stream, apart from the scalar
+            # data pages so scalar and vector accesses never share an address
+            self.vector_mem_region = [mem_region_t(name = "vector_region_0",
+                                                   size_in_bytes = self.argv.vector_mem_region_size,
+                                                   xwr = 8)]
         self.check_setting()  # check if the setting is legal
 
     def check_setting(self):
@@ -652,6 +660,10 @@ class riscv_instr_gen_config:
         parse.add_argument('--vreg_init_method', help = 'vreg_init_method',
                            choices = [i.name for i in vreg_init_method_t],
                            default = vreg_init_method_t.RANDOM_VALUES_LOAD.name)
+        parse.add_argument('--vreg_dump', help = 'vreg_dump',
+                           choices = [0, 1], type = int, default = 1)
+        parse.add_argument('--vector_mem_region_size', help = 'vector_mem_region_size',
+                           type = int, default = 1024)
         parse.add_argument('--enable_b_extension', help = 'enable_b_extension',
                            choices = [0, 1], type = int, default = 0)
         parse.add_argument('--enable_bitmanip_groups', help = 'enable_bitmanip_groups',
