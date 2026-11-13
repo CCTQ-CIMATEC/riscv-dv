@@ -123,6 +123,68 @@ DEFINE_VA_INSTR(riscv_instr_name_t.VMAX, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
                 [va_variant_t.VV, va_variant_t.VX], g=globals())
 
+# RVV 1.0 section 11.10: vector single-width integer multiply instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VMUL, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMULH, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMULHU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMULHSU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+
+# RVV 1.0 section 11.11: vector integer divide instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VDIVU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VDIV, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+
+# RVV 1.0 section 11.12: vector widening integer multiply instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VWMUL, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWMULU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWMULSU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+
+# RVV 1.0 section 11.13: vector single-width integer multiply-add instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VMACC, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VNMSAC, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VMADD, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VNMSUB, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+
+# RVV 1.0 section 11.14: vector widening integer multiply-add instructions, vwmaccus
+# only has the .vx form
+DEFINE_VA_INSTR(riscv_instr_name_t.VWMACCU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWMACC, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWMACCSU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VWMACCUS, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VX], g=globals())
+
 # RVV 1.0 sections 11.15 and 11.16: vector integer merge and move instructions
 DEFINE_VA_INSTR(riscv_instr_name_t.VMERGE, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
@@ -130,6 +192,57 @@ DEFINE_VA_INSTR(riscv_instr_name_t.VMERGE, riscv_instr_format_t.VA_FORMAT,
 DEFINE_VA_INSTR(riscv_instr_name_t.VMV, riscv_instr_format_t.VA_FORMAT,
                 riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
                 [va_variant_t.VV, va_variant_t.VX, va_variant_t.VI], g=globals())
+
+# RVV 1.0 section 12.1: vector single-width saturating add and subtract
+DEFINE_VA_INSTR(riscv_instr_name_t.VSADDU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.VI], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSADD, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.VI], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSSUBU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSSUB, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+
+# RVV 1.0 section 12.2: vector single-width averaging add and subtract
+DEFINE_VA_INSTR(riscv_instr_name_t.VAADDU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VAADD, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VASUBU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VASUB, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+
+# RVV 1.0 section 12.3: vector single-width fractional multiply with rounding and
+# saturation
+DEFINE_VA_INSTR(riscv_instr_name_t.VSMUL, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.ARITHMETIC, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX], g=globals())
+
+# RVV 1.0 section 12.4: vector single-width scaling shift instructions
+DEFINE_VA_INSTR(riscv_instr_name_t.VSSRL, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.SHIFT, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.VI], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VSSRA, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.SHIFT, riscv_instr_group_t.RVV,
+                [va_variant_t.VV, va_variant_t.VX, va_variant_t.VI], g=globals())
+
+# RVV 1.0 section 12.5: vector narrowing fixed-point clip instructions, with a uimm5
+# shift amount like the other shifts
+DEFINE_VA_INSTR(riscv_instr_name_t.VNCLIPU, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.SHIFT, riscv_instr_group_t.RVV,
+                [va_variant_t.WV, va_variant_t.WX, va_variant_t.WI], g=globals())
+DEFINE_VA_INSTR(riscv_instr_name_t.VNCLIP, riscv_instr_format_t.VA_FORMAT,
+                riscv_instr_category_t.SHIFT, riscv_instr_group_t.RVV,
+                [va_variant_t.WV, va_variant_t.WX, va_variant_t.WI], g=globals())
 
 # RVV 1.0 section 14.1: vector single-width integer reduction instructions
 DEFINE_VA_INSTR(riscv_instr_name_t.VREDSUM_VS, riscv_instr_format_t.VA_FORMAT,

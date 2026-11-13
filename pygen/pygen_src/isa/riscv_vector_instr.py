@@ -67,6 +67,8 @@ class riscv_vector_instr(riscv_instr):
         self.is_narrowing_instr = 0
         # Source EEW divisor of vzext/vsext: 2 for .vf2, 4 for .vf4
         self.ext_factor = 1
+        # Multiply-add operand order: vd, vs1/rs1, vs2
+        self.is_multiply_add_instr = 0
 
     # RVV 1.0 section 3.4.2: a register group starts at a register aligned to its size
     @vsc.constraint
@@ -134,6 +136,9 @@ class riscv_vector_instr(riscv_instr):
             self.vd_narrower_vs2 = 1
         if name.startswith("VZEXT") or name.startswith("VSEXT"):
             self.ext_factor = int(name[-1])
+        if name in ["VMACC", "VNMSAC", "VMADD", "VNMSUB",
+                    "VWMACCU", "VWMACC", "VWMACCSU", "VWMACCUS"]:
+            self.is_multiply_add_instr = 1
         if len(self.va_variants) > 0:
             self.has_va_variant = 1
         if self.format == riscv_instr_format_t.VA_FORMAT:
@@ -253,6 +258,9 @@ class riscv_vector_instr(riscv_instr):
                     # vmv.v.v, vmv.v.x and vmv.v.i have no vs2
                     name = "{}.V.{}".format(self.get_instr_name(), self.va_variant.name[1])
                     operands = [vd, src]
+                elif self.is_multiply_add_instr:
+                    name = "{}.{}".format(self.get_instr_name(), self.va_variant.name)
+                    operands = [vd, src, vs2]
                 else:
                     name = "{}.{}".format(self.get_instr_name(), self.va_variant.name)
                     operands = [vd, vs2, src]

@@ -491,6 +491,7 @@ class riscv_instr_name_t(IntEnum):
     VAADD = auto()
     VASUBU = auto()
     VASUB = auto()
+    VSMUL = auto()
     VSSRL = auto()
     VSSRA = auto()
     VNCLIPU = auto()
