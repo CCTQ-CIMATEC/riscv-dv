@@ -185,12 +185,14 @@ class riscv_vector_instr(riscv_instr):
             self.has_rs1 = int(self.instr_name == riscv_instr_name_t.VSETVLI)
             self.has_imm = int(self.instr_name == riscv_instr_name_t.VSETIVLI)
             self.mask_enable = 0
-        # Variants the core does not implement, from the optional unsupported_va_variants of
-        # the core setting; an instruction left without variants is not supported
-        unsupported = getattr(rcs, "unsupported_va_variants", {}).get(self.instr_name, [])
-        self.has_no_supported_variant = int(len(self.va_variants) > 0 and
-                                            all(v in unsupported for v in self.va_variants))
-        self.va_variants = [v for v in self.va_variants if v not in unsupported]
+        # Variants left out by the optional unsupported_va_variants of the core setting and by
+        # name.variant tokens of +vector_instr_exclude; an instruction left without variants
+        # is not generated
+        removed = [*getattr(rcs, "unsupported_va_variants", {}).get(self.instr_name, []),
+                   *self.excluded_va_variants(cfg)]
+        self.has_no_variant_left = int(len(self.va_variants) > 0 and
+                                       all(v in removed for v in self.va_variants))
+        self.va_variants = [v for v in self.va_variants if v not in removed]
         if len(self.va_variants) > 0:
             self.has_va_variant = 1
         if self.format == riscv_instr_format_t.VA_FORMAT and not self.has_scalar_rd:
@@ -244,10 +246,18 @@ class riscv_vector_instr(riscv_instr):
         return groups
 
     # A token names a group, an instruction (vmv_x_s) or every instruction whose name starts
-    # with it before the first underscore (vredsum, vle, vzext)
+    # with it before the first underscore (vredsum, vle, vzext); name.variant tokens (vwaddu.wx)
+    # only remove that variant, see excluded_va_variants
     def matches_token(self, token):
         name = self.instr_name.name.lower()
         return token in self.vector_groups() or token in [name, name.split("_")[0]]
+
+    # Variants named by name.variant tokens of +vector_instr_exclude for this instruction
+    def excluded_va_variants(self, cfg):
+        name = self.instr_name.name.lower()
+        return [va_variant_t[t.split(".")[1].upper()] for t in cfg.vector_instr_exclude
+                if "." in t and t.split(".")[0] == name and
+                t.split(".")[1].upper() in va_variant_t.__members__]
 
     # +vector_instr_include keeps the instructions matching any of its tokens, and
     # +vector_instr_exclude then removes the ones matching any of its tokens
@@ -255,12 +265,13 @@ class riscv_vector_instr(riscv_instr):
         include = cfg.vector_instr_include
         if include and not any(self.matches_token(t) for t in include):
             return 0
-        return int(not any(self.matches_token(t) for t in cfg.vector_instr_exclude))
+        return int(not any(self.matches_token(t) for t in cfg.vector_instr_exclude
+                           if "." not in t))
 
     # Filter the instructions the vtype of the test makes illegal
     def is_supported(self, cfg):
         vector_cfg = cfg.vector_cfg
-        if self.has_no_supported_variant:
+        if self.has_no_variant_left:
             return 0
         # 2*SEW results or sources need 2*SEW <= ELEN and 2*LMUL <= 8
         if ((self.is_widening_instr or self.is_narrowing_instr) and

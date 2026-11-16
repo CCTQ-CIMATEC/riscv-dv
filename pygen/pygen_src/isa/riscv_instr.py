@@ -21,7 +21,8 @@ from bitstring import BitArray
 from importlib import import_module
 from pygen_src.riscv_instr_pkg import (pkg_ins, riscv_instr_category_t, riscv_reg_t,
                                        riscv_instr_name_t, riscv_instr_format_t,
-                                       riscv_instr_group_t, imm_t, privileged_mode_t)
+                                       riscv_instr_group_t, imm_t, privileged_mode_t,
+                                       va_variant_t)
 from pygen_src.riscv_instr_gen_config import cfg
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 reload(logging)
@@ -194,14 +195,21 @@ class riscv_instr:
         cls.build_basic_instruction_list(cfg)
         cls.create_csr_filter(cfg)
 
-    # Every selection token must name a group or a registered vector instruction
+    # Every selection token must name a group or a registered vector instruction, and a
+    # name.variant token of +vector_instr_exclude an instruction and a variant
     @classmethod
     def check_vector_selection(cls, cfg):
         vector = [t for n, t in cls.instr_template.items()
                   if t.group == riscv_instr_group_t.RVV]
         groups = set().union(*(t.vector_groups() for t in vector))
         for token in cfg.vector_instr_include + cfg.vector_instr_exclude:
-            if token not in groups and not any(t.matches_token(token) for t in vector):
+            if "." in token and token in cfg.vector_instr_exclude:
+                name, variant = token.split(".", 1)
+                known = (variant.upper() in va_variant_t.__members__ and
+                         any(t.instr_name.name.lower() == name for t in vector))
+            else:
+                known = token in groups or any(t.matches_token(token) for t in vector)
+            if not known:
                 logging.critical("Unknown vector instruction or group in the instruction "
                                  "selection: %s", token)
                 sys.exit(1)
