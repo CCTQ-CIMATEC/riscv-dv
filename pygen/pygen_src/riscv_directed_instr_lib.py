@@ -20,7 +20,9 @@ from pygen_src.riscv_instr_stream import riscv_rand_instr_stream
 from pygen_src.isa.riscv_instr import riscv_instr
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.riscv_instr_pkg import (riscv_reg_t, riscv_pseudo_instr_name_t,
-                                       riscv_instr_name_t, mem_region_t, pkg_ins)
+                                       riscv_instr_name_t, mem_region_t, pkg_ins,
+                                       riscv_instr_category_t, riscv_instr_group_t,
+                                       riscv_instr_format_t)
 from pygen_src.riscv_pseudo_instr import riscv_pseudo_instr
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 
@@ -375,7 +377,15 @@ class riscv_vector_vsetvli_instr_stream(riscv_directed_instr_stream):
     # The operands are assigned without randomize_with: after inline rd/rs1 constraints on a
     # vsetvli, pyvsc occasionally failed to solve later vector instructions that constrain rd
     def post_randomize(self):
-        form = random.choice(["vsetivli", "vsetvli_avl", "vsetvli_vlmax", "vsetvli_keep"])
+        forms = []
+        if riscv_instr_name_t.VSETIVLI in riscv_instr.vector_selected:
+            forms.append("vsetivli")
+        if riscv_instr_name_t.VSETVLI in riscv_instr.vector_selected:
+            forms.extend(["vsetvli_avl", "vsetvli_vlmax", "vsetvli_keep"])
+        if not forms:
+            logging.critical("vsetvli and vsetivli are not selected for %0s", self.name)
+            sys.exit(1)
+        form = random.choice(forms)
         rd = self.rand_gpr(allow_zero = True)
         if form == "vsetivli":
             instr = riscv_instr.get_instr(riscv_instr_name_t.VSETIVLI)
@@ -400,4 +410,93 @@ class riscv_vector_vsetvli_instr_stream(riscv_directed_instr_stream):
             instr.rs1 = rs1
         instr.rd = rd
         self.instr_list.append(instr)
+        super().post_randomize()
+
+
+# Selected vector instructions whose vector operands come from a pool of +vector_hazard_regs
+# registers (4 by default), +vector_hazard_len instructions (8 by default) per stream: results
+# are read and overwritten by the next instructions, as in multiply-accumulate chains
+# The pool holds registers aligned to the widest group of the vtype and leaves v0 out, so
+# masked instructions keep their destination legal
+@vsc.randobj
+class riscv_vector_hazard_instr_stream(riscv_directed_instr_stream):
+    def __init__(self):
+        super().__init__()
+
+    def post_randomize(self):
+        names = [n for n in riscv_instr.vector_selected
+                 if riscv_instr.instr_template[n].category not in
+                 [riscv_instr_category_t.LOAD, riscv_instr_category_t.STORE,
+                  riscv_instr_category_t.CSR]]
+        if not names:
+            logging.critical("No selected vector instruction for %0s", self.name)
+            sys.exit(1)
+        align = min(8, 2 * cfg.vector_cfg.vlmul)
+        candidates = list(range(align, 32, align))
+        pool = random.sample(candidates, min(cfg.argv.vector_hazard_regs, len(candidates)))
+        for i in range(cfg.argv.vector_hazard_len):
+            instr = riscv_instr.get_instr(random.choice(names))
+            instr.use_reg_pool = 1
+            instr.reg_pool.extend(pool)
+            try:
+                instr.randomize()
+            except Exception:
+                # Some operand rules cannot be met inside a small pool
+                instr.use_reg_pool = 0
+                instr.randomize()
+            self.keep_scalar_operands(instr)
+            self.instr_list.append(instr)
+        super().post_randomize()
+
+    # x register operands outside the reserved registers
+    def keep_scalar_operands(self, instr):
+        excluded = [*cfg.reserved_regs, *self.reserved_rd]
+        allowed = [reg for reg in riscv_reg_t if reg not in excluded]
+        if instr.has_rd and instr.rd in excluded:
+            instr.rd = random.choice(allowed)
+        if instr.has_rs1 and instr.rs1 in excluded:
+            instr.rs1 = random.choice(allowed)
+
+
+# A vector instruction with an x register result, vcpop.m, vfirst.m or vmv.x.s, followed by up
+# to +vector_return_consumers scalar instructions (3 by default) that read its rd and may write
+# it again, so the scalar side meets RAW and WAW dependencies on a pending vector result
+# rd is x0 one time in eight: the response still arrives, with no architectural effect
+@vsc.randobj
+class riscv_vector_scalar_return_stream(riscv_directed_instr_stream):
+    def __init__(self):
+        super().__init__()
+
+    def post_randomize(self):
+        producers = [n for n in riscv_instr.vector_selected
+                     if riscv_instr.instr_template[n].has_scalar_rd]
+        # From instr_template, so +vector_instr_only=1 keeps the consumers
+        consumers = [n for n, t in riscv_instr.instr_template.items()
+                     if t.group != riscv_instr_group_t.RVV and t.group in rcs.supported_isa and
+                     t.format in [riscv_instr_format_t.R_FORMAT,
+                                  riscv_instr_format_t.I_FORMAT] and
+                     t.category in [riscv_instr_category_t.ARITHMETIC,
+                                    riscv_instr_category_t.LOGICAL,
+                                    riscv_instr_category_t.SHIFT,
+                                    riscv_instr_category_t.COMPARE]]
+        if not producers or not consumers:
+            logging.critical("%0s needs a selected vcpop.m, vfirst.m or vmv.x.s and scalar "
+                             "arithmetic", self.name)
+            sys.exit(1)
+        excluded = [riscv_reg_t.ZERO, *cfg.reserved_regs, *self.reserved_rd]
+        allowed = [reg for reg in riscv_reg_t if reg not in excluded]
+        result = riscv_reg_t.ZERO if random.randrange(8) == 0 else random.choice(allowed)
+        instr = riscv_instr.get_instr(random.choice(producers))
+        instr.randomize()
+        instr.rd = result
+        self.instr_list.append(instr)
+        for i in range(random.randint(1, cfg.argv.vector_return_consumers)):
+            consumer = riscv_instr.get_instr(random.choice(consumers))
+            consumer.randomize()
+            consumer.rs1 = result
+            if consumer.has_rs2 and random.randrange(2):
+                consumer.rs2 = result
+            # Sometimes overwrite the pending result
+            consumer.rd = result if random.randrange(4) == 0 else random.choice(allowed)
+            self.instr_list.append(consumer)
         super().post_randomize()

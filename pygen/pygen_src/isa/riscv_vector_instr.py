@@ -20,6 +20,22 @@ from pygen_src.riscv_instr_pkg import (pkg_ins, riscv_instr_format_t, riscv_inst
                                        riscv_instr_name_t, va_variant_t, imm_t)
 
 
+# Instruction groups of +vector_instr_include/+vector_instr_exclude, see vector_groups
+VECTOR_GROUPS = ["arith", "logic", "shift", "compare", "minmax", "mul", "muladd", "div",
+                 "fixedpoint", "widen", "narrow", "ext", "reduction", "mask", "move",
+                 "loadstore", "config"]
+VECTOR_GROUP_NAMES = {
+    "arith": ["VADD", "VSUB", "VRSUB", "VWADDU", "VWADD", "VWSUBU", "VWSUB"],
+    "minmax": ["VMINU", "VMIN", "VMAXU", "VMAX"],
+    "mul": ["VMUL", "VMULH", "VMULHU", "VMULHSU", "VWMUL", "VWMULU", "VWMULSU"],
+    "div": ["VDIVU", "VDIV", "VREMU", "VREM"],
+    "fixedpoint": ["VSADDU", "VSADD", "VSSUBU", "VSSUB", "VAADDU", "VAADD", "VASUBU", "VASUB",
+                   "VSMUL", "VSSRL", "VSSRA", "VNCLIPU", "VNCLIP"],
+    "move": ["VMV", "VMERGE", "VMV_X_S", "VMV_S_X"],
+    "config": ["VSETVLI", "VSETIVLI"],
+}
+
+
 # Base class for the RISC-V vector extension, following RVV 1.0
 # Port of the SV riscv_vector_instr (spec v0.8), restricted to integer instructions
 # Vector registers are 5-bit fields printed as v<n>, so the group constraints can use
@@ -59,6 +75,9 @@ class riscv_vector_instr(riscv_instr):
         self.src_emul_fractional = vsc.bit_t(1)
         # vs1 is an operand of the drawn variant, set in pre_randomize
         self.has_vs1 = vsc.bit_t(1, 1)
+        # Vector operands from reg_pool only, set by riscv_vector_hazard_instr_stream
+        self.use_reg_pool = vsc.bit_t(1)
+        self.reg_pool = vsc.list_t(vsc.uint8_t())
         # Element width of loads and stores, encoded in the mnemonic
         self.eew = 8
         self.sub_extension = ""
@@ -104,6 +123,15 @@ class riscv_vector_instr(riscv_instr):
         with vsc.if_then((self.vd_wider_vs1 == 1) & (self.has_vs1 == 1)):
             ((self.vs1 + self.vs1_grp <= self.vd) | (self.vs1 >= self.vd + self.vd_grp) |
              (self.vs1 + self.vs1_grp == self.vd + self.vd_grp))
+
+    # A few registers for all vector operands give frequent RAW, WAR and WAW dependencies
+    @vsc.constraint
+    def reg_pool_c(self):
+        with vsc.if_then(self.use_reg_pool == 1):
+            self.vd.inside(self.reg_pool)
+            self.vs1.inside(self.reg_pool)
+            self.vs2.inside(self.reg_pool)
+            self.vs3.inside(self.reg_pool)
 
     # RVV 1.0 section 5.3: a masked destination cannot overlap v0, except for mask results and the
     # scalar destination of reductions
@@ -188,6 +216,46 @@ class riscv_vector_instr(riscv_instr):
                 self.instr_name == riscv_instr_name_t.VSETIVLI):
             self.imm_type = imm_t.UIMM
         self.imm_mask = (self.imm_mask << self.imm_len) & self.shift_t
+
+    # Groups of this instruction for the instruction selection options
+    def vector_groups(self):
+        name = self.instr_name.name
+        groups = {g for g, names in VECTOR_GROUP_NAMES.items() if name in names}
+        if self.category in [riscv_instr_category_t.LOAD, riscv_instr_category_t.STORE]:
+            groups.add("loadstore")
+        if self.category == riscv_instr_category_t.COMPARE:
+            groups.add("compare")
+        if self.category == riscv_instr_category_t.LOGICAL and not self.is_mask_logical_instr:
+            groups.add("logic")
+        if self.category == riscv_instr_category_t.SHIFT and "fixedpoint" not in groups:
+            groups.add("shift")
+        if self.is_multiply_add_instr:
+            groups.add("muladd")
+        if self.is_reduction_instr:
+            groups.add("reduction")
+        if self.is_mask_logical_instr or name in ["VCPOP_M", "VFIRST_M"]:
+            groups.add("mask")
+        if self.ext_factor > 1:
+            groups.add("ext")
+        if self.is_widening_instr or (self.is_reduction_instr and name.startswith("VW")):
+            groups.add("widen")
+        if self.is_narrowing_instr:
+            groups.add("narrow")
+        return groups
+
+    # A token names a group, an instruction (vmv_x_s) or every instruction whose name starts
+    # with it before the first underscore (vredsum, vle, vzext)
+    def matches_token(self, token):
+        name = self.instr_name.name.lower()
+        return token in self.vector_groups() or token in [name, name.split("_")[0]]
+
+    # +vector_instr_include keeps the instructions matching any of its tokens, and
+    # +vector_instr_exclude then removes the ones matching any of its tokens
+    def is_selected(self, cfg):
+        include = cfg.vector_instr_include
+        if include and not any(self.matches_token(t) for t in include):
+            return 0
+        return int(not any(self.matches_token(t) for t in cfg.vector_instr_exclude))
 
     # Filter the instructions the vtype of the test makes illegal
     def is_supported(self, cfg):

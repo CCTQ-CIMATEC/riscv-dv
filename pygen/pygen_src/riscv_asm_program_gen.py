@@ -29,7 +29,8 @@ from pygen_src.riscv_signature_pkg import (signature_type_t, core_status_t,
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.riscv_data_page_gen import riscv_data_page_gen
 from pygen_src.riscv_privileged_common_seq import riscv_privileged_common_seq
-from pygen_src.riscv_utils import factory
+from pygen_src.riscv_utils import factory, stream_classes
+from pygen_src.riscv_load_store_instr_lib import riscv_vector_load_store_instr_stream
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 
 
@@ -506,12 +507,14 @@ class riscv_asm_program_gen:
                 "{}addi x{}, x{}, {}".format(pkg_ins.indent, cfg.gpr[0], cfg.gpr[0],
                                              rcs.VLEN // 8)))
 
-    # vector_region_0 for riscv_vector_load_store_instr_stream and vreg_dump_data, aligned for
-    # vector loads and stores
+    # vector_region_0 for riscv_vector_load_store_instr_stream and its subclasses, and
+    # vreg_dump_data, aligned for vector loads and stores
     def gen_vector_data(self, hart):
         prefix = pkg_ins.hart_prefix(hart)
         align = (cfg.vector_cfg.load_store_alignment - 1).bit_length()
-        if "riscv_vector_load_store_instr_stream" in self.directed_instr_stream_ratio:
+        streams = stream_classes()
+        if any(issubclass(streams.get(name, object), riscv_vector_load_store_instr_stream)
+               for name in self.directed_instr_stream_ratio):
             for region in cfg.vector_mem_region:
                 self.instr_stream.extend((".align {}".format(align),
                                           "{}{}:".format(prefix, region.name)))

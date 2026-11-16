@@ -296,51 +296,88 @@ class riscv_load_store_hazard_instr_stream(riscv_load_store_base_instr_stream):
 
 # Vector loads and stores in cfg.vector_mem_region, port of the SV
 # riscv_vector_load_store_instr_stream for unit-stride accesses
-# The base address is a multiple of cfg.vector_cfg.load_store_alignment and the accessed
-# bytes, VLMAX * EEW / 8, stay inside the region
+# Each access has its own base register, set by la to a multiple of
+# cfg.vector_cfg.load_store_alignment, and its VLMAX * EEW / 8 bytes stay inside the region
+# +vector_ls_num sets the maximum number of accesses per stream and +vector_ls_locality their
+# placement: random, same (one base for all, so stores and loads meet) or sequential
+# (back-to-back blocks)
 @vsc.randobj
 class riscv_vector_load_store_instr_stream(riscv_mem_access_stream):
     def __init__(self):
         super().__init__()
-        self.rs1_reg = riscv_reg_t.ZERO
-        self.load_store_instr = None
+        self.region_id = 0
 
-    def add_rs1_init_la_instr(self, gpr, idx, base = 0):
+    # Selected vector loads and stores, optionally of one category
+    def load_store_names(self, category = None):
+        categories = [category] if category is not None else \
+            [riscv_instr_category_t.LOAD, riscv_instr_category_t.STORE]
+        names = [n for n in riscv_instr.vector_selected
+                 if riscv_instr.instr_template[n].category in categories]
+        if not names:
+            logging.critical("No selected vector load/store instruction for %0s", self.name)
+            sys.exit(1)
+        return names
+
+    def access_bytes(self, eew):
+        return cfg.vector_cfg.vl * eew // 8
+
+    def region_size(self):
+        return cfg.vector_mem_region[self.region_id].size_in_bytes
+
+    # Random aligned offset for an access of num_bytes
+    def rand_offset(self, num_bytes):
+        align = cfg.vector_cfg.load_store_alignment
+        if num_bytes > self.region_size():
+            logging.critical("Vector access of %0d bytes does not fit %0s", num_bytes,
+                             cfg.vector_mem_region[self.region_id].name)
+            sys.exit(1)
+        return random.randrange(0, (self.region_size() - num_bytes) // align + 1) * align
+
+    # la of a new base register to region + offset, then the access; mixed instructions
+    # added later keep the base register
+    def add_access(self, name, eew, offset):
+        instr = riscv_instr.get_instr(name)
+        instr.set_eew(eew)
+        instr.randomize()
+        excluded = [riscv_reg_t.ZERO, *cfg.reserved_regs, *self.reserved_rd]
+        rs1 = random.choice([reg for reg in riscv_reg_t if reg not in excluded])
+        self.reserved_rd.append(rs1)
+        instr.rs1 = rs1
         la_instr = riscv_pseudo_instr()
         la_instr.pseudo_instr_name = riscv_pseudo_instr_name_t.LA
-        la_instr.rd = gpr
+        la_instr.rd = rs1
         la_instr.imm_str = "{}{}+{}".format(pkg_ins.hart_prefix(self.hart),
-                                            cfg.vector_mem_region[idx].name, base)
-        self.instr_list.insert(0, la_instr)
+                                            cfg.vector_mem_region[self.region_id].name, offset)
+        self.instr_list.extend([la_instr, instr])
+        return instr
+
+    # Accesses of the stream, +vector_ls_num of them placed by +vector_ls_locality; subclasses
+    # override it for other access patterns
+    def gen_accesses(self):
+        names = self.load_store_names()
+        accesses = [(random.choice(names), random.choice(cfg.vector_cfg.legal_eew))
+                    for i in range(random.randint(1, cfg.argv.vector_ls_num))]
+        locality = cfg.argv.vector_ls_locality
+        if locality == "same":
+            offset = self.rand_offset(max(self.access_bytes(eew) for _, eew in accesses))
+            offsets = [offset] * len(accesses)
+        else:
+            offsets = []
+            prev_bytes = 0
+            for _, eew in accesses:
+                num_bytes = self.access_bytes(eew)
+                if locality == "sequential" and offsets:
+                    offset = offsets[-1] + prev_bytes
+                    if offset + num_bytes > self.region_size():
+                        offset = 0
+                else:
+                    offset = self.rand_offset(num_bytes)
+                offsets.append(offset)
+                prev_bytes = num_bytes
+        for (name, eew), offset in zip(accesses, offsets):
+            self.add_access(name, eew, offset)
 
     def post_randomize(self):
-        vector_cfg = cfg.vector_cfg
-        allowed_instr = [name for name, instr in riscv_instr.instr_template.items()
-                         if instr.group == riscv_instr_group_t.RVV and
-                         instr.category in [riscv_instr_category_t.LOAD,
-                                            riscv_instr_category_t.STORE]]
-        if not allowed_instr:
-            logging.critical("No vector load/store instruction for %0s", self.name)
-            sys.exit(1)
-        self.load_store_instr = riscv_instr.get_instr(random.choice(allowed_instr))
-        eew = random.choice(vector_cfg.legal_eew)
-        self.load_store_instr.set_eew(eew)
-        data_page_id = random.randrange(0, len(cfg.vector_mem_region))
-        page_size = cfg.vector_mem_region[data_page_id].size_in_bytes
-        num_bytes = vector_cfg.vl * eew // 8
-        align = vector_cfg.load_store_alignment
-        if num_bytes > page_size:
-            logging.critical("Vector access of %0d bytes does not fit data page %0d",
-                             num_bytes, data_page_id)
-            sys.exit(1)
-        base = random.randrange(0, (page_size - num_bytes) // align + 1) * align
-        excluded = [riscv_reg_t.ZERO, *cfg.reserved_regs, *self.reserved_rd]
-        self.rs1_reg = random.choice([reg for reg in riscv_reg_t if reg not in excluded])
-        # Mixed instructions must keep the base register
-        self.reserved_rd.append(self.rs1_reg)
-        with self.load_store_instr.randomize_with() as it:
-            it.rs1 == self.rs1_reg
-        self.instr_list.append(self.load_store_instr)
+        self.gen_accesses()
         self.add_mixed_instr(random.randrange(0, 11))
-        self.add_rs1_init_la_instr(self.rs1_reg, data_page_id, base)
         super().post_randomize()

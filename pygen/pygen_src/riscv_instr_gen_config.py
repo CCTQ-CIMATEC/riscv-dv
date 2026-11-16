@@ -289,6 +289,11 @@ class riscv_instr_gen_config:
         self.vreg_init_method = vreg_init_method_t[self.argv.vreg_init_method]
         # Store all vector registers to vreg_dump_data at the end of the main program
         self.vreg_dump = self.argv.vreg_dump
+        # Vector instruction selection: comma-separated groups or instruction names
+        self.vector_instr_include = [t.strip().lower() for t in
+                                     self.argv.vector_instr_include.split(",") if t.strip()]
+        self.vector_instr_exclude = [t.strip().lower() for t in
+                                     self.argv.vector_instr_exclude.split(",") if t.strip()]
         # Bit manipulation extension support
         self.enable_b_extension = self.argv.enable_b_extension
         self.enable_bitmanip_groups = self.argv.enable_bitmanip_groups
@@ -662,6 +667,20 @@ class riscv_instr_gen_config:
                            default = vreg_init_method_t.RANDOM_VALUES_LOAD.name)
         parse.add_argument('--vreg_dump', help = 'vreg_dump',
                            choices = [0, 1], type = int, default = 1)
+        parse.add_argument('--vector_instr_include', help = 'vector_instr_include',
+                           default = "")
+        parse.add_argument('--vector_instr_exclude', help = 'vector_instr_exclude',
+                           default = "")
+        parse.add_argument('--vector_ls_num', help = 'vector_ls_num', type = int, default = 1)
+        parse.add_argument('--vector_ls_locality', help = 'vector_ls_locality',
+                           choices = ["random", "same", "sequential"], default = "random")
+        parse.add_argument('--vector_hazard_len', help = 'vector_hazard_len',
+                           type = int, default = 8)
+        parse.add_argument('--vector_hazard_regs', help = 'vector_hazard_regs',
+                           type = int, default = 4)
+        parse.add_argument('--vector_return_consumers', help = 'vector_return_consumers',
+                           type = int, default = 3)
+        parse.add_argument('--stream_module', help = 'stream_module', default = "")
         parse.add_argument('--vector_mem_region_size', help = 'vector_mem_region_size',
                            type = int, default = 1024)
         parse.add_argument('--enable_b_extension', help = 'enable_b_extension',

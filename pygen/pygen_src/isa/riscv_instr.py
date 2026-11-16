@@ -44,6 +44,9 @@ class riscv_instr:
     instr_category = defaultdict(list)
     basic_instr = []
     instr_template = {}
+    # Supported vector instructions kept by the instruction selection options, loads, stores
+    # and vsetvli/vsetivli included; the vector streams draw from it
+    vector_selected = []
 
     # Privileged CSR filter
     exclude_reg = []
@@ -140,6 +143,7 @@ class riscv_instr:
         cls.instr_names.clear()
         cls.instr_group.clear()
         cls.instr_category.clear()
+        cls.vector_selected.clear()
         for instr_name, instr_group in cls.instr_registry.items():
             if instr_name in rcs.unsupported_instr:
                 continue
@@ -151,6 +155,10 @@ class riscv_instr:
 
             if not instr_inst.is_supported(cfg):
                 continue
+            if instr_group == riscv_instr_group_t.RVV:
+                if not instr_inst.is_selected(cfg):
+                    continue
+                cls.vector_selected.append(instr_name)
             # C_JAL is RV32C only instruction
             if ((rcs.XLEN != 32) and (instr_name == riscv_instr_name_t.C_JAL)):
                 continue
@@ -181,8 +189,24 @@ class riscv_instr:
                 cls.instr_category[instr_inst.category.name].append(instr_name)
                 cls.instr_group[instr_inst.group.name].append(instr_name)
                 cls.instr_names.append(instr_name)
+        if cfg.enable_vector_extension:
+            cls.check_vector_selection(cfg)
         cls.build_basic_instruction_list(cfg)
         cls.create_csr_filter(cfg)
+
+    # Every selection token must name a group or a registered vector instruction
+    @classmethod
+    def check_vector_selection(cls, cfg):
+        vector = [t for n, t in cls.instr_template.items()
+                  if t.group == riscv_instr_group_t.RVV]
+        groups = set().union(*(t.vector_groups() for t in vector))
+        for token in cfg.vector_instr_include + cfg.vector_instr_exclude:
+            if token not in groups and not any(t.matches_token(token) for t in vector):
+                logging.critical("Unknown vector instruction or group in the instruction "
+                                 "selection: %s", token)
+                sys.exit(1)
+        logging.info("Selected vector instructions: %s",
+                     " ".join(n.name for n in cls.vector_selected))
 
     @classmethod
     def create_instr(cls, instr_name, instr_group):
