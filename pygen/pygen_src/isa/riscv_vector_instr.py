@@ -14,7 +14,7 @@ import logging
 import random
 import sys
 import vsc
-from pygen_src.isa.riscv_instr import riscv_instr
+from pygen_src.isa.riscv_instr import riscv_instr, rcs
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.riscv_instr_pkg import (pkg_ins, riscv_instr_format_t, riscv_instr_category_t,
                                        riscv_instr_name_t, va_variant_t, imm_t)
@@ -157,6 +157,12 @@ class riscv_vector_instr(riscv_instr):
             self.has_rs1 = int(self.instr_name == riscv_instr_name_t.VSETVLI)
             self.has_imm = int(self.instr_name == riscv_instr_name_t.VSETIVLI)
             self.mask_enable = 0
+        # Variants the core does not implement, from the optional unsupported_va_variants of
+        # the core setting; an instruction left without variants is not supported
+        unsupported = getattr(rcs, "unsupported_va_variants", {}).get(self.instr_name, [])
+        self.has_no_supported_variant = int(len(self.va_variants) > 0 and
+                                            all(v in unsupported for v in self.va_variants))
+        self.va_variants = [v for v in self.va_variants if v not in unsupported]
         if len(self.va_variants) > 0:
             self.has_va_variant = 1
         if self.format == riscv_instr_format_t.VA_FORMAT and not self.has_scalar_rd:
@@ -186,6 +192,8 @@ class riscv_vector_instr(riscv_instr):
     # Filter the instructions the vtype of the test makes illegal
     def is_supported(self, cfg):
         vector_cfg = cfg.vector_cfg
+        if self.has_no_supported_variant:
+            return 0
         # 2*SEW results or sources need 2*SEW <= ELEN and 2*LMUL <= 8
         if ((self.is_widening_instr or self.is_narrowing_instr) and
                 not vector_cfg.vec_narrowing_widening):
