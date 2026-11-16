@@ -43,7 +43,9 @@ class riscv_instr_base_test:
         try:
             self._run_phase(num)
             return 0
-        except Exception as e:
+        # sys.exit after a critical error raises SystemExit, which would kill the pool worker
+        # and leave pool.map waiting for its result
+        except (Exception, SystemExit):
             traceback.print_exc()
             return 1
 
