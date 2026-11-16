@@ -13,8 +13,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 import math
 from pygen_src.riscv_instr_pkg import (privileged_reg_t, satp_mode_t,
                                        riscv_instr_group_t, mtvec_mode_t,
-                                       privileged_mode_t, riscv_instr_name_t,
-                                       va_variant_t)
+                                       privileged_mode_t)
 
 
 # -----------------------------------------------------------------------------
@@ -30,23 +29,11 @@ SATP_MODE = satp_mode_t.BARE
 # Supported Privileged mode
 supported_privileged_mode = [privileged_mode_t.MACHINE_MODE]
 
-# DSPA: RV32IM scalar core with the Ketu vector unit, rv32im_zve32x with the vector
-# instructions and variants the Ketu decoder implements
+# DSPA: RV32IM scalar core + Ketu vector core, subset rv32im_zve32x
+# Currently unsupported instructions and variants can be excluded from generation with +vector_instr_exclude
 
 # Unsupported instructions
-unsupported_instr = [riscv_instr_name_t.VMULHU, riscv_instr_name_t.VMULHSU,
-                     riscv_instr_name_t.VDIVU, riscv_instr_name_t.VDIV,
-                     riscv_instr_name_t.VMADD, riscv_instr_name_t.VNMSUB,
-                     riscv_instr_name_t.VWMULSU, riscv_instr_name_t.VWMACCSU,
-                     riscv_instr_name_t.VWMACCUS]
-
-# Unsupported variants of the remaining vector instructions
-# Widening add and subtract only have the .vv form
-unsupported_va_variants = {
-    name: [va_variant_t.VX, va_variant_t.WV, va_variant_t.WX]
-    for name in [riscv_instr_name_t.VWADDU, riscv_instr_name_t.VWADD,
-                 riscv_instr_name_t.VWSUBU, riscv_instr_name_t.VWSUB]
-}
+unsupported_instr = []
 
 # ISA supported by the processor
 # RVV stands for the Zve32x subset: integer vector instructions with ELEN = 32
