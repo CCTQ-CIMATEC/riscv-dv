@@ -168,8 +168,9 @@ class riscv_instr:
                 continue
             if (cfg.enable_sfence and instr_name == riscv_instr_name_t.SFENCE_VMA):
                 continue
-            if instr_name in [riscv_instr_name_t.FENCE, riscv_instr_name_t.FENCE_I,
-                              riscv_instr_name_t.SFENCE_VMA]:
+            # FENCE stays in SYNCH, which only +no_fence=0 adds to the random stream;
+            # FENCE.I (Zifencei) and SFENCE.VMA are never generated
+            if instr_name in [riscv_instr_name_t.FENCE_I, riscv_instr_name_t.SFENCE_VMA]:
                 continue
             is_vector = instr_inst.group == riscv_instr_group_t.RVV
             if (instr_inst.group in rcs.supported_isa and
@@ -239,6 +240,12 @@ class riscv_instr:
             if(riscv_instr_group_t.RV32C in rcs.supported_isa and
                not(cfg.disable_compressed_instr)):
                 cls.basic_instr.append(riscv_instr_name_t.C_EBREAK)
+        if cfg.no_ecall == 0:
+            if cfg.bare_program_mode:
+                cls.basic_instr.append(riscv_instr_name_t.ECALL)
+            else:
+                # The kernel's ecall_handler ends the test
+                logging.warning("no_ecall=0 needs bare_program_mode=1: no random ecall")
         if cfg.no_dret == 0:
             cls.basic_instr.append(riscv_instr_name_t.DRET)
         if cfg.no_fence == 0:

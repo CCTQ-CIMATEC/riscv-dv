@@ -1000,11 +1000,12 @@ class riscv_asm_program_gen:
         self.gen_section(pkg_ins.get_label("illegal_instr_handler", hart), instr)
 
     # A bare program has no kernel sections, hence no trap handler. One that can trap
-    # (illegal instructions, random ebreak) gets the small M-mode handler below instead.
+    # (illegal instructions, random ebreak or ecall) gets the small M-mode handler below instead.
     def bare_program_traps(self):
-        return cfg.bare_program_mode and (cfg.illegal_instr_ratio > 0 or not cfg.no_ebreak)
+        return cfg.bare_program_mode and (cfg.illegal_instr_ratio > 0 or not cfg.no_ebreak or
+                                          not cfg.no_ecall)
 
-    # Resumes after an illegal instruction or ebreak at mepc + 4, like the kernel handlers.
+    # Resumes after an illegal instruction, ebreak or ecall at mepc + 4, like the kernel handlers.
     # It needs no stack and no mscratch: it only uses scratch_reg and tp, which the random
     # program never writes (a bare program sets up no kernel stack in tp). Any other trap ends
     # the test with tohost = ((0x100 | mcause[7:0]) << 1) | 1, i.e. test number 0x1XX.
@@ -1021,6 +1022,8 @@ class riscv_asm_program_gen:
                 tmp, hex(exception_cause_t.ILLEGAL_INSTRUCTION)),
             "beq {}, {}, {}bare_trap_skip".format(scratch, tmp, prefix),
             "li {}, {} # BREAKPOINT".format(tmp, hex(exception_cause_t.BREAKPOINT)),
+            "beq {}, {}, {}bare_trap_skip".format(scratch, tmp, prefix),
+            "li {}, {} # ECALL_MMODE".format(tmp, hex(exception_cause_t.ECALL_MMODE)),
             "bne {}, {}, {}bare_trap_fail".format(scratch, tmp, prefix)])
         self.gen_section(prefix + "bare_trap_skip", [
             "csrr {}, {} # MEPC".format(scratch, hex(privileged_reg_t.MEPC)),

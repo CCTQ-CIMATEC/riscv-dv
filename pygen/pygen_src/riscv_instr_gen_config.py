@@ -173,6 +173,7 @@ class riscv_instr_gen_config:
         self.no_load_store = self.argv.no_load_store  # No load/store instruction
         self.no_csr_instr = self.argv.no_csr_instr  # No csr instruction
         self.no_ebreak = self.argv.no_ebreak  # No ebreak instruction
+        self.no_ecall = self.argv.no_ecall  # No random ecall instruction (bare_program_mode only)
         self.no_dret = self.argv.no_dret  # No dret instruction
         self.no_fence = self.argv.no_fence  # No fence instruction
         self.no_wfi = self.argv.no_wfi  # No WFI instruction
@@ -583,6 +584,9 @@ class riscv_instr_gen_config:
         parse.add_argument('--instr_cnt', help = 'instr_cnt', type = int, default = 200)
         parse.add_argument('--tvec_alignment', help = 'tvec_alignment', type = int, default = 2)
         parse.add_argument('--no_ebreak', help = 'no_ebreak',
+                           choices = [0, 1], type = int, default = 1)
+        parse.add_argument('--no_ecall', help = 'no_ecall: 0 mixes ecall into the random stream; '
+                           'bare_program_mode only, where the bare trap handler resumes after it',
                            choices = [0, 1], type = int, default = 1)
         parse.add_argument('--no_dret', help = 'no_dret', choices = [0, 1], type = int, default = 1)
         parse.add_argument('--no_wfi', help = 'no_wfi', choices = [0, 1], type = int, default = 1)
