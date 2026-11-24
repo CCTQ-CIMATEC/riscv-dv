@@ -22,13 +22,15 @@ from pygen_src.riscv_callstack_gen import riscv_callstack_gen
 from pygen_src.riscv_instr_pkg import (pkg_ins, privileged_reg_t,
                                        privileged_mode_t, mtvec_mode_t,
                                        misa_ext_t, riscv_instr_group_t,
-                                       satp_mode_t, exception_cause_t)
+                                       satp_mode_t, exception_cause_t,
+                                       vreg_init_method_t)
 from pygen_src.riscv_signature_pkg import (signature_type_t, core_status_t,
                                            test_result_t)
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.riscv_data_page_gen import riscv_data_page_gen
 from pygen_src.riscv_privileged_common_seq import riscv_privileged_common_seq
-from pygen_src.riscv_utils import factory
+from pygen_src.riscv_utils import factory, stream_classes
+from pygen_src.riscv_load_store_instr_lib import riscv_vector_load_store_instr_stream
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 
 
@@ -118,6 +120,8 @@ class riscv_asm_program_gen:
             self.main_program[hart].generate_instr_stream()
             logging.info("Generating main program instruction stream...done")
             self.instr_stream.extend(self.main_program[hart].instr_string_list)
+            if cfg.enable_vector_extension and cfg.vreg_dump:
+                self.gen_vreg_dump(hart)
             """
             If PMP is supported, need to jump from end of main program
             to test_done section at the end of main_program, as the test_done
@@ -144,6 +148,11 @@ class riscv_asm_program_gen:
         for hart in range(cfg.num_of_harts):
             # Starting point of data section
             self.gen_data_page_begin(hart)
+            if (cfg.enable_vector_extension and
+                    cfg.vreg_init_method == vreg_init_method_t.RANDOM_VALUES_LOAD):
+                self.gen_vreg_init_data(hart)
+            if cfg.enable_vector_extension:
+                self.gen_vector_data(hart)
             if not cfg.no_data_page:
                 # User data section
                 self.gen_data_page(hart)
@@ -346,7 +355,7 @@ class riscv_asm_program_gen:
             pkg_ins.indent, cfg.sp, pkg_ins.hart_prefix(hart))
         self.instr_stream.append(init_string)
         if cfg.enable_vector_extension:
-            self.randomize_vec_gpr_and_csr()
+            self.randomize_vec_gpr_and_csr(hart)
         self.core_is_initialized()
         self.gen_dummy_csr_write()
         if self.bare_program_traps():
@@ -452,9 +461,78 @@ class riscv_asm_program_gen:
                                                            hex(reg_val.get_val())))
 
     # Initialize vector general purpose registers
-    def init_vec_gpr(self):
-        # TODO
-        pass
+    # Runs with a temporary SEW = min(ELEN, XLEN), LMUL = 1 setting, replaced by the test
+    # setting in randomize_vec_gpr_and_csr
+    def init_vec_gpr(self, hart):
+        sew = min(rcs.ELEN, rcs.XLEN)
+        num_elements = rcs.VLEN // sew
+        # rs1 = x0 with rd != x0 sets vl = VLMAX
+        self.instr_stream.append("{}vsetvli x{}, x0, {}".format(
+            pkg_ins.indent, cfg.gpr[1], cfg.vector_cfg.vtype_str(sew, 1)))
+        if cfg.vreg_init_method == vreg_init_method_t.SAME_VALUES_ALL_ELEMS:
+            for v in range(rcs.NUM_VEC_GPR):
+                self.instr_stream.append("{}vmv.v.x v{}, x{}".format(pkg_ins.indent, v, v))
+        elif cfg.vreg_init_method == vreg_init_method_t.RANDOM_VALUES_VMV:
+            for v in range(rcs.NUM_VEC_GPR):
+                # v0 holds the previous contents while vslide1up inserts each new element
+                for e in range(num_elements):
+                    if e > 0:
+                        self.instr_stream.append("{}vmv.v.v v0, v{}".format(pkg_ins.indent, v))
+                    self.instr_stream.append("{}li x{}, {}".format(
+                        pkg_ins.indent, cfg.gpr[0], hex(random.getrandbits(sew))))
+                    self.instr_stream.append("{}vslide1up.vx v{}, v{}, x{}".format(
+                        pkg_ins.indent, v, 1 if v == 0 else 0, cfg.gpr[0]))
+        else:
+            # One VLEN/8 block of vreg_init_data per register
+            self.instr_stream.append("{}la x{}, {}vreg_init_data".format(
+                pkg_ins.indent, cfg.gpr[0], pkg_ins.hart_prefix(hart)))
+            for v in range(rcs.NUM_VEC_GPR):
+                self.instr_stream.append("{}vle{}.v v{}, (x{})".format(
+                    pkg_ins.indent, sew, v, cfg.gpr[0]))
+                self.instr_stream.append("{}addi x{}, x{}, {}".format(
+                    pkg_ins.indent, cfg.gpr[0], cfg.gpr[0], rcs.VLEN // 8))
+
+    # Store v0-v31 to vreg_dump_data, one VLEN/8 block per register, so the final vector state
+    # reaches memory and the store checks of the testbench
+    def gen_vreg_dump(self, hart):
+        sew = min(rcs.ELEN, rcs.XLEN)
+        self.instr_stream.extend((
+            "{}vsetvli x{}, x0, {}".format(pkg_ins.indent, cfg.gpr[1],
+                                           cfg.vector_cfg.vtype_str(sew, 1)),
+            "{}la x{}, {}vreg_dump_data".format(pkg_ins.indent, cfg.gpr[0],
+                                                pkg_ins.hart_prefix(hart))))
+        for v in range(rcs.NUM_VEC_GPR):
+            self.instr_stream.extend((
+                "{}vse{}.v v{}, (x{})".format(pkg_ins.indent, sew, v, cfg.gpr[0]),
+                "{}addi x{}, x{}, {}".format(pkg_ins.indent, cfg.gpr[0], cfg.gpr[0],
+                                             rcs.VLEN // 8)))
+
+    # vector_region_0 for riscv_vector_load_store_instr_stream and its subclasses, and
+    # vreg_dump_data, aligned for vector loads and stores
+    def gen_vector_data(self, hart):
+        prefix = pkg_ins.hart_prefix(hart)
+        align = (cfg.vector_cfg.load_store_alignment - 1).bit_length()
+        streams = stream_classes()
+        if any(issubclass(streams.get(name, object), riscv_vector_load_store_instr_stream)
+               for name in self.directed_instr_stream_ratio):
+            for region in cfg.vector_mem_region:
+                self.instr_stream.extend((".align {}".format(align),
+                                          "{}{}:".format(prefix, region.name)))
+                words = [hex(random.getrandbits(32)) for i in range(region.size_in_bytes // 4)]
+                for i in range(0, len(words), 8):
+                    self.instr_stream.append(".word {}".format(", ".join(words[i:i + 8])))
+        if cfg.vreg_dump:
+            self.instr_stream.extend((".align {}".format(align),
+                                      "{}vreg_dump_data:".format(prefix),
+                                      ".zero {}".format(rcs.NUM_VEC_GPR * rcs.VLEN // 8)))
+
+    # Random contents of all vector registers for RANDOM_VALUES_LOAD
+    def gen_vreg_init_data(self, hart):
+        self.instr_stream.extend((".align 6",
+                                  "{}vreg_init_data:".format(pkg_ins.hart_prefix(hart))))
+        words = [hex(random.getrandbits(32)) for i in range(rcs.NUM_VEC_GPR * rcs.VLEN // 32)]
+        for i in range(0, len(words), 8):
+            self.instr_stream.append(".word {}".format(", ".join(words[i:i + 8])))
 
     # Initialize floating point general purpose registers
     def init_floating_point_gpr(self):
@@ -922,11 +1000,12 @@ class riscv_asm_program_gen:
         self.gen_section(pkg_ins.get_label("illegal_instr_handler", hart), instr)
 
     # A bare program has no kernel sections, hence no trap handler. One that can trap
-    # (illegal instructions, random ebreak) gets the small M-mode handler below instead.
+    # (illegal instructions, random ebreak or ecall) gets the small M-mode handler below instead.
     def bare_program_traps(self):
-        return cfg.bare_program_mode and (cfg.illegal_instr_ratio > 0 or not cfg.no_ebreak)
+        return cfg.bare_program_mode and (cfg.illegal_instr_ratio > 0 or not cfg.no_ebreak or
+                                          not cfg.no_ecall)
 
-    # Resumes after an illegal instruction or ebreak at mepc + 4, like the kernel handlers.
+    # Resumes after an illegal instruction, ebreak or ecall at mepc + 4, like the kernel handlers.
     # It needs no stack and no mscratch: it only uses scratch_reg and tp, which the random
     # program never writes (a bare program sets up no kernel stack in tp). Any other trap ends
     # the test with tohost = ((0x100 | mcause[7:0]) << 1) | 1, i.e. test number 0x1XX.
@@ -943,6 +1022,8 @@ class riscv_asm_program_gen:
                 tmp, hex(exception_cause_t.ILLEGAL_INSTRUCTION)),
             "beq {}, {}, {}bare_trap_skip".format(scratch, tmp, prefix),
             "li {}, {} # BREAKPOINT".format(tmp, hex(exception_cause_t.BREAKPOINT)),
+            "beq {}, {}, {}bare_trap_skip".format(scratch, tmp, prefix),
+            "li {}, {} # ECALL_MMODE".format(tmp, hex(exception_cause_t.ECALL_MMODE)),
             "bne {}, {}, {}bare_trap_fail".format(scratch, tmp, prefix)])
         self.gen_section(prefix + "bare_trap_skip", [
             "csrr {}, {} # MEPC".format(scratch, hex(privileged_reg_t.MEPC)),
@@ -1236,6 +1317,19 @@ class riscv_asm_program_gen:
     # Vector extension generation
     # ----------------------------------------------------------------------------------
 
-    def randomize_vec_gpr_and_csr(self):
-        # TODO
-        pass
+    def randomize_vec_gpr_and_csr(self, hart):
+        vector_cfg = cfg.vector_cfg
+        # Vector instructions and CSRs are illegal while mstatus.VS is Off, and a bare
+        # program skips the privileged setup that writes it, so set VS to Initial here
+        self.instr_stream.extend((
+            "{}li x{}, {}".format(pkg_ins.indent, cfg.gpr[0], hex(0x200)),
+            "{}csrs {}, x{}".format(pkg_ins.indent, hex(privileged_reg_t.MSTATUS), cfg.gpr[0]),
+            "{}csrwi {}, {}".format(pkg_ins.indent, hex(privileged_reg_t.VXSTAT),
+                                    vector_cfg.vxsat),
+            "{}csrwi {}, {}".format(pkg_ins.indent, hex(privileged_reg_t.VXRM),
+                                    vector_cfg.vxrm.value)))
+        self.init_vec_gpr(hart)
+        self.instr_stream.extend((
+            "{}li x{}, {}".format(pkg_ins.indent, cfg.gpr[1], vector_cfg.vl),
+            "{}vsetvli x{}, x{}, {}".format(pkg_ins.indent, cfg.gpr[0], cfg.gpr[1],
+                                            vector_cfg.vtype_str())))
