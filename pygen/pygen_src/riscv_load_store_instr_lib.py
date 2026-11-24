@@ -21,7 +21,10 @@ from importlib import import_module
 from pygen_src.riscv_instr_gen_config import cfg
 from pygen_src.isa.riscv_instr import riscv_instr
 from pygen_src.riscv_directed_instr_lib import riscv_mem_access_stream
-from pygen_src.riscv_instr_pkg import riscv_reg_t, riscv_instr_name_t, riscv_instr_group_t
+from pygen_src.riscv_pseudo_instr import riscv_pseudo_instr
+from pygen_src.riscv_instr_pkg import (riscv_reg_t, riscv_instr_name_t, riscv_instr_group_t,
+                                       riscv_instr_category_t, riscv_pseudo_instr_name_t,
+                                       pkg_ins)
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 
 
@@ -289,3 +292,92 @@ class riscv_load_store_hazard_instr_stream(riscv_load_store_base_instr_stream):
                 self.addr[i] = self.addr[i - 1]
             else:
                 self.offset[i], self.addr[i] = self.rand_offset_addr()
+
+
+# Vector loads and stores in cfg.vector_mem_region, port of the SV
+# riscv_vector_load_store_instr_stream for unit-stride accesses
+# Each access has its own base register, set by la to a multiple of
+# cfg.vector_cfg.load_store_alignment, and its VLMAX * EEW / 8 bytes stay inside the region
+# +vector_ls_num sets the maximum number of accesses per stream and +vector_ls_locality their
+# placement: random, same (one base for all, so stores and loads meet) or sequential
+# (back-to-back blocks)
+@vsc.randobj
+class riscv_vector_load_store_instr_stream(riscv_mem_access_stream):
+    def __init__(self):
+        super().__init__()
+        self.region_id = 0
+
+    # Selected vector loads and stores, optionally of one category
+    def load_store_names(self, category = None):
+        categories = [category] if category is not None else \
+            [riscv_instr_category_t.LOAD, riscv_instr_category_t.STORE]
+        names = [n for n in riscv_instr.vector_selected
+                 if riscv_instr.instr_template[n].category in categories]
+        if not names:
+            logging.critical("No selected vector load/store instruction for %0s", self.name)
+            sys.exit(1)
+        return names
+
+    def access_bytes(self, eew):
+        return cfg.vector_cfg.vl * eew // 8
+
+    def region_size(self):
+        return cfg.vector_mem_region[self.region_id].size_in_bytes
+
+    # Random aligned offset for an access of num_bytes
+    def rand_offset(self, num_bytes):
+        align = cfg.vector_cfg.load_store_alignment
+        if num_bytes > self.region_size():
+            logging.critical("Vector access of %0d bytes does not fit %0s", num_bytes,
+                             cfg.vector_mem_region[self.region_id].name)
+            sys.exit(1)
+        return random.randrange(0, (self.region_size() - num_bytes) // align + 1) * align
+
+    # la of a new base register to region + offset, then the access; mixed instructions
+    # added later keep the base register
+    def add_access(self, name, eew, offset):
+        instr = riscv_instr.get_instr(name)
+        instr.set_eew(eew)
+        instr.randomize()
+        excluded = [riscv_reg_t.ZERO, *cfg.reserved_regs, *self.reserved_rd]
+        rs1 = random.choice([reg for reg in riscv_reg_t if reg not in excluded])
+        self.reserved_rd.append(rs1)
+        instr.rs1 = rs1
+        la_instr = riscv_pseudo_instr()
+        la_instr.pseudo_instr_name = riscv_pseudo_instr_name_t.LA
+        la_instr.rd = rs1
+        la_instr.imm_str = "{}{}+{}".format(pkg_ins.hart_prefix(self.hart),
+                                            cfg.vector_mem_region[self.region_id].name, offset)
+        self.instr_list.extend([la_instr, instr])
+        return instr
+
+    # Accesses of the stream, +vector_ls_num of them placed by +vector_ls_locality; subclasses
+    # override it for other access patterns
+    def gen_accesses(self):
+        names = self.load_store_names()
+        accesses = [(random.choice(names), random.choice(cfg.vector_cfg.legal_eew))
+                    for i in range(random.randint(1, cfg.argv.vector_ls_num))]
+        locality = cfg.argv.vector_ls_locality
+        if locality == "same":
+            offset = self.rand_offset(max(self.access_bytes(eew) for _, eew in accesses))
+            offsets = [offset] * len(accesses)
+        else:
+            offsets = []
+            prev_bytes = 0
+            for _, eew in accesses:
+                num_bytes = self.access_bytes(eew)
+                if locality == "sequential" and offsets:
+                    offset = offsets[-1] + prev_bytes
+                    if offset + num_bytes > self.region_size():
+                        offset = 0
+                else:
+                    offset = self.rand_offset(num_bytes)
+                offsets.append(offset)
+                prev_bytes = num_bytes
+        for (name, eew), offset in zip(accesses, offsets):
+            self.add_access(name, eew, offset)
+
+    def post_randomize(self):
+        self.gen_accesses()
+        self.add_mixed_instr(random.randrange(0, 11))
+        super().post_randomize()

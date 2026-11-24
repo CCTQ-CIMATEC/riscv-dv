@@ -34,7 +34,9 @@ class riscv_instr_base_test:
         self.asm = ""
 
     def run(self):
-        with multiprocessing.Pool(processes = cfg.num_of_tests) as pool:
+        # This module starts the pool at import with no __main__ guard, so workers must be forked:
+        # forkserver (default on Linux since Python 3.14) and spawn re-import it in each worker
+        with multiprocessing.get_context("fork").Pool(processes = cfg.num_of_tests) as pool:
             ret = pool.map(self.run_phase, list(range(cfg.num_of_tests)))
         if 1 in ret:
             raise Exception("Test-generation jobs failed")
@@ -43,7 +45,9 @@ class riscv_instr_base_test:
         try:
             self._run_phase(num)
             return 0
-        except Exception as e:
+        # sys.exit after a critical error raises SystemExit, which would kill the pool worker
+        # and leave pool.map waiting for its result
+        except (Exception, SystemExit):
             traceback.print_exc()
             return 1
 

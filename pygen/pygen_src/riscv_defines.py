@@ -16,6 +16,7 @@ from pygen_src.isa.riscv_compressed_instr import riscv_compressed_instr
 from pygen_src.isa.riscv_floating_point_instr import riscv_floating_point_instr
 from pygen_src.isa.riscv_b_instr import riscv_b_instr
 from pygen_src.isa.riscv_amo_instr import riscv_amo_instr
+from pygen_src.isa.riscv_vector_instr import riscv_vector_instr
 
 
 # Regular integer instruction
@@ -141,6 +142,28 @@ def DEFINE_AMO_INSTR(instr_n, instr_format, instr_category,
     NewClass = type(class_name, (riscv_amo_instr,), {
         "__init__": __init__,
         "valid": riscv_amo_instr.register(instr_n, instr_group)
+    })
+    g[class_name] = NewClass
+
+
+# Vector instruction, vav lists the allowed va_variant_t values (.vv, .vx, .vi)
+def DEFINE_VA_INSTR(instr_n, instr_format, instr_category,
+                    instr_group, vav = (), ext = "", g = globals()):
+    class_name = "riscv_{}_instr".format(instr_n.name)
+
+    def __init__(self):
+        riscv_vector_instr.__init__(self)
+        self.instr_name = instr_n
+        self.format = instr_format
+        self.category = instr_category
+        self.group = instr_group
+        self.va_variants = list(vav)
+        self.sub_extension = ext
+        self.set_imm_len()
+        self.set_rand_mode()
+    NewClass = type(class_name, (riscv_vector_instr,), {
+        "__init__": __init__,
+        "valid": riscv_vector_instr.register(instr_n, instr_group)
     })
     g[class_name] = NewClass
 

@@ -21,7 +21,8 @@ from bitstring import BitArray
 from importlib import import_module
 from pygen_src.riscv_instr_pkg import (pkg_ins, riscv_instr_category_t, riscv_reg_t,
                                        riscv_instr_name_t, riscv_instr_format_t,
-                                       riscv_instr_group_t, imm_t, privileged_mode_t)
+                                       riscv_instr_group_t, imm_t, privileged_mode_t,
+                                       va_variant_t)
 from pygen_src.riscv_instr_gen_config import cfg
 rcs = import_module("pygen_src.target." + cfg.argv.target + ".riscv_core_setting")
 reload(logging)
@@ -44,6 +45,9 @@ class riscv_instr:
     instr_category = defaultdict(list)
     basic_instr = []
     instr_template = {}
+    # Supported vector instructions kept by the instruction selection options, loads, stores
+    # and vsetvli/vsetivli included; the vector streams draw from it
+    vector_selected = []
 
     # Privileged CSR filter
     exclude_reg = []
@@ -140,14 +144,22 @@ class riscv_instr:
         cls.instr_names.clear()
         cls.instr_group.clear()
         cls.instr_category.clear()
+        cls.vector_selected.clear()
         for instr_name, instr_group in cls.instr_registry.items():
             if instr_name in rcs.unsupported_instr:
+                continue
+            # Vector templates read cfg.vector_cfg, which exists only with the extension enabled
+            if instr_group == riscv_instr_group_t.RVV and not cfg.enable_vector_extension:
                 continue
             instr_inst = cls.create_instr(instr_name, instr_group)
             cls.instr_template[instr_name] = instr_inst
 
             if not instr_inst.is_supported(cfg):
                 continue
+            if instr_group == riscv_instr_group_t.RVV:
+                if not instr_inst.is_selected(cfg):
+                    continue
+                cls.vector_selected.append(instr_name)
             # C_JAL is RV32C only instruction
             if ((rcs.XLEN != 32) and (instr_name == riscv_instr_name_t.C_JAL)):
                 continue
@@ -156,20 +168,54 @@ class riscv_instr:
                 continue
             if (cfg.enable_sfence and instr_name == riscv_instr_name_t.SFENCE_VMA):
                 continue
-            if instr_name in [riscv_instr_name_t.FENCE, riscv_instr_name_t.FENCE_I,
-                              riscv_instr_name_t.SFENCE_VMA]:
+            # FENCE stays in SYNCH, which only +no_fence=0 adds to the random stream;
+            # FENCE.I (Zifencei) and SFENCE.VMA are never generated
+            if instr_name in [riscv_instr_name_t.FENCE_I, riscv_instr_name_t.SFENCE_VMA]:
                 continue
+            is_vector = instr_inst.group == riscv_instr_group_t.RVV
             if (instr_inst.group in rcs.supported_isa and
                     not(cfg.disable_compressed_instr and
                     instr_inst.group.name in ["RV32C", "RV64C", "RV32DC",
                                               "RV32FC", "RV128C"]) and
                     not(not(cfg.enable_floating_point) and instr_inst.group.name in
-                    ["RV32F", "RV64F", "RV32D", "RV64D"])):
+                    ["RV32F", "RV64F", "RV32D", "RV64D"]) and
+                    not (cfg.vector_instr_only and not is_vector)):
+                # Vector loads and stores need an aligned base register, set up by
+                # riscv_vector_load_store_instr_stream, and vsetvli/vsetivli keep the vtype
+                # of the test only through riscv_vector_vsetvli_instr_stream; both streams
+                # take them from instr_template
+                if is_vector and instr_inst.category in [riscv_instr_category_t.LOAD,
+                                                         riscv_instr_category_t.STORE,
+                                                         riscv_instr_category_t.CSR]:
+                    continue
                 cls.instr_category[instr_inst.category.name].append(instr_name)
                 cls.instr_group[instr_inst.group.name].append(instr_name)
                 cls.instr_names.append(instr_name)
+        if cfg.enable_vector_extension:
+            cls.check_vector_selection(cfg)
         cls.build_basic_instruction_list(cfg)
         cls.create_csr_filter(cfg)
+
+    # Every selection token must name a group or a registered vector instruction, and a
+    # name.variant token of +vector_instr_exclude an instruction and a variant
+    @classmethod
+    def check_vector_selection(cls, cfg):
+        vector = [t for n, t in cls.instr_template.items()
+                  if t.group == riscv_instr_group_t.RVV]
+        groups = set().union(*(t.vector_groups() for t in vector))
+        for token in cfg.vector_instr_include + cfg.vector_instr_exclude:
+            if "." in token and token in cfg.vector_instr_exclude:
+                name, variant = token.split(".", 1)
+                known = (variant.upper() in va_variant_t.__members__ and
+                         any(t.instr_name.name.lower() == name for t in vector))
+            else:
+                known = token in groups or any(t.matches_token(token) for t in vector)
+            if not known:
+                logging.critical("Unknown vector instruction or group in the instruction "
+                                 "selection: %s", token)
+                sys.exit(1)
+        logging.info("Selected vector instructions: %s",
+                     " ".join(n.name for n in cls.vector_selected))
 
     @classmethod
     def create_instr(cls, instr_name, instr_group):
@@ -194,6 +240,12 @@ class riscv_instr:
             if(riscv_instr_group_t.RV32C in rcs.supported_isa and
                not(cfg.disable_compressed_instr)):
                 cls.basic_instr.append(riscv_instr_name_t.C_EBREAK)
+        if cfg.no_ecall == 0:
+            if cfg.bare_program_mode:
+                cls.basic_instr.append(riscv_instr_name_t.ECALL)
+            else:
+                # The kernel's ecall_handler ends the test
+                logging.warning("no_ecall=0 needs bare_program_mode=1: no random ecall")
         if cfg.no_dret == 0:
             cls.basic_instr.append(riscv_instr_name_t.DRET)
         if cfg.no_fence == 0:
